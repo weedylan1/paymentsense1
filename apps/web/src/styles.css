@@ -1125,30 +1125,45 @@ button {
   font-size: 13px;
   font-weight: 800;
   justify-content: center;
+  overflow: visible;
+  position: relative;
 }
 
 .customer-map-marker span {
+  align-items: center;
+  display: flex;
+  height: 100%;
+  justify-content: center;
   line-height: 1;
+  position: relative;
+  width: 100%;
+  z-index: 1;
 }
 
-.customer-map-marker.pulsing {
-  animation: customer-map-marker-pulse 900ms ease-out 0s 3;
+.customer-map-marker.pulsing::after {
+  animation: customer-map-marker-pulse 250ms ease-out 0s 8;
+  border: 3px solid currentColor;
+  border-radius: 999px;
+  content: "";
+  inset: -5px;
+  opacity: 0;
+  position: absolute;
 }
 
 @keyframes customer-map-marker-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(0, 127, 120, .55), 0 6px 18px rgba(0, 0, 0, .24);
+    opacity: .95;
     transform: scale(1);
   }
 
-  60% {
-    box-shadow: 0 0 0 16px rgba(0, 127, 120, 0), 0 6px 18px rgba(0, 0, 0, .24);
-    transform: scale(1.18);
+  55% {
+    opacity: .45;
+    transform: scale(1.9);
   }
 
   100% {
-    box-shadow: 0 0 0 0 rgba(0, 127, 120, 0), 0 6px 18px rgba(0, 0, 0, .24);
-    transform: scale(1);
+    opacity: 0;
+    transform: scale(2.35);
   }
 }
 

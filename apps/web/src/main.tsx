@@ -715,6 +715,7 @@ type CustomerPageViewState = {
   customerValueTypeId?: string;
   assignedUserId?: string;
   onlyBookmarked?: boolean;
+  onlyMapped?: boolean;
   onlyCancelled: boolean;
   onlyMatched: boolean;
   addedFrom?: string;
@@ -954,6 +955,7 @@ function App() {
     customerValueTypeId: "",
     assignedUserId: "",
     onlyBookmarked: false,
+    onlyMapped: false,
     onlyCancelled: true,
     onlyMatched: false,
     addedFrom: "",
@@ -972,6 +974,7 @@ function App() {
     customerValueTypeId: "",
     assignedUserId: "",
     onlyBookmarked: false,
+    onlyMapped: false,
     onlyCancelled: false,
     onlyMatched: false,
     addedFrom: "",
@@ -987,6 +990,7 @@ function App() {
     customerValueTypeId: "",
     assignedUserId: "",
     onlyBookmarked: false,
+    onlyMapped: false,
     onlyCancelled: false,
     onlyMatched: false,
     addedFrom: "",
@@ -1002,6 +1006,7 @@ function App() {
     customerValueTypeId: "",
     assignedUserId: "",
     onlyBookmarked: false,
+    onlyMapped: false,
     onlyCancelled: false,
     onlyMatched: false,
     addedFrom: "",
@@ -1017,6 +1022,7 @@ function App() {
     customerValueTypeId: "",
     assignedUserId: "",
     onlyBookmarked: false,
+    onlyMapped: false,
     onlyCancelled: true,
     onlyMatched: false,
     addedFrom: "",
@@ -1280,43 +1286,43 @@ function App() {
           {primaryViews.map((view) => {
             const Icon = view.icon;
             return (
-              <button
-                key={view.id}
-                className={activeView === view.id ? "nav-item active" : "nav-item"}
-                onClick={() => {
-                  if (view.id === "ai-company-insight") {
-                    setAiInsightContext(null);
-                  }
-                  navigateToView(view.id);
-                }}
-                type="button"
-              >
-                <Icon size={18} aria-hidden />
-                <span>{view.label}</span>
-              </button>
+              <Fragment key={view.id}>
+                <button
+                  className={activeView === view.id ? "nav-item active" : "nav-item"}
+                  onClick={() => {
+                    if (view.id === "ai-company-insight") {
+                      setAiInsightContext(null);
+                    }
+                    navigateToView(view.id);
+                  }}
+                  type="button"
+                >
+                  <Icon size={18} aria-hidden />
+                  <span>{view.label}</span>
+                </button>
+                {view.id === "geography" && savedCustomerMaps.data?.length ? (
+                  <div className="nav-sublist geography-saved-list">
+                    {savedCustomerMaps.data.map((map) => (
+                      <div className="saved-map-nav-row" key={map.id}>
+                        <button
+                          className={activeView === "geography" && customerMapLoadRequest === map.id ? "nav-item active" : "nav-item"}
+                          onClick={() => {
+                            setCustomerMapLoadRequest(map.id);
+                            navigateToView("geography");
+                          }}
+                          type="button"
+                          title={`${map.customerCount} customer${map.customerCount === 1 ? "" : "s"}`}
+                        >
+                          <MapPin size={15} aria-hidden />
+                          <span>{map.name}</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </Fragment>
             );
           })}
-
-          {savedCustomerMaps.data?.length ? (
-            <div className="nav-sublist geography-saved-list">
-              {savedCustomerMaps.data.map((map) => (
-                <div className="saved-map-nav-row" key={map.id}>
-                  <button
-                    className={activeView === "geography" && customerMapLoadRequest === map.id ? "nav-item active" : "nav-item"}
-                    onClick={() => {
-                      setCustomerMapLoadRequest(map.id);
-                      navigateToView("geography");
-                    }}
-                    type="button"
-                    title={`${map.customerCount} customer${map.customerCount === 1 ? "" : "s"}`}
-                  >
-                    <MapPin size={15} aria-hidden />
-                    <span>{map.name}</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
 
           <div className="nav-group">
             <button
@@ -5763,6 +5769,16 @@ function CustomerGeographyView({
   const rows = state.data?.items.map((row) => ({ ...row, ...(coordinateOverrides[row.id] ?? {}) })) ?? [];
   const selectedIds = useMemo(() => new Set(Object.keys(selectedMapRows).map(Number)), [selectedMapRows]);
   const selectedRows = Object.values(selectedMapRows).map((row) => ({ ...row, ...(coordinateOverrides[row.id] ?? {}) }));
+  const customerRowsInMap = selectedRows
+    .filter((row) => mapSelectionSource === "customers")
+    .sort((left, right) =>
+      compareValues(
+        viewState.sortKey === "postcode" ? left.postcode ?? "" : left.entityName,
+        viewState.sortKey === "postcode" ? right.postcode ?? "" : right.entityName,
+        viewState.sortDirection
+      )
+    );
+  const customerTableRows = viewState.onlyMapped ? customerRowsInMap : rows;
   const filteredLeadRows = selectedRows.filter((row) => {
     const query = viewState.searchText.trim().toLowerCase();
     if (query) {
@@ -5849,7 +5865,7 @@ function CustomerGeographyView({
     pulseTimerRef.current = window.setTimeout(() => {
       setPulsingCustomerId(null);
       pulseTimerRef.current = null;
-    }, 3200);
+    }, 2000);
   }
 
   function focusMapRow(row: CustomerMapRow) {
@@ -5874,6 +5890,7 @@ function CustomerGeographyView({
       customerValueTypeId: "",
       assignedUserId: "",
       onlyBookmarked: false,
+      onlyMapped: false,
       onlyCancelled: mapSelectionSource === "customers",
       onlyMatched: false,
       addedFrom: "",
@@ -5971,6 +5988,13 @@ function CustomerGeographyView({
     });
   }
 
+  function startNewMap() {
+    setCurrentSavedMap(null);
+    setSelectedMapRows({});
+    setPulsingCustomerId(null);
+    setNotice({ kind: "success", message: "New map started." });
+  }
+
   async function saveCurrentMap() {
     const rowsToSave = mapSelectionSource === "leads" ? filteredLeadRows : selectedRows;
     const customerIds = rowsToSave.map((row) => row.id);
@@ -6034,6 +6058,9 @@ function CustomerGeographyView({
             {mapSelectionSource === "customers" ? (
               <label className="header-filter"><input type="checkbox" checked={viewState.onlyBookmarked ?? false} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyBookmarked: event.target.checked })); }} /><span>Bookmarked only</span></label>
             ) : null}
+            {mapSelectionSource === "customers" ? (
+              <label className="header-filter"><input type="checkbox" checked={viewState.onlyMapped ?? false} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyMapped: event.target.checked })); }} /><span>Only in map</span></label>
+            ) : null}
             <label className="header-filter"><input type="checkbox" checked={viewState.onlyMatched} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyMatched: event.target.checked })); }} /><span>Only with matches</span></label>
             <label className="header-filter"><input type="checkbox" checked={viewState.onlyCancelled} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyCancelled: event.target.checked })); }} /><span>Cancelled only</span></label>
             <button className="secondary-action" type="button" onClick={resetFilters}>Reset</button>
@@ -6085,10 +6112,11 @@ function CustomerGeographyView({
       <div className={mapExpanded ? "geography-layout geography-layout-map-expanded" : "geography-layout"}>
         <section className="geography-list">
           <div className="geography-list-toolbar">
-            <span>{mapSelectionSource === "leads" ? `${selectedRows.length} selected leads` : `${state.data?.total ?? 0} filtered customers`}</span>
+            <span>{mapSelectionSource === "leads" ? `${selectedRows.length} selected leads` : `${viewState.onlyMapped ? customerRowsInMap.length : state.data?.total ?? 0} filtered customers`}</span>
             {mapSelectionSource === "leads" ? <span>{filteredLeadRows.length} after filters</span> : null}
             <span>{mappedSelectedRows.length} mapped {mapSelectionSource === "leads" ? "leads" : "selections"}</span>
             <button className="secondary-action" type="button" disabled={mappedSelectedRows.length === 0} onClick={fitSelectedMarkers}>Fit selected</button>
+            <button className="secondary-action" type="button" disabled={Object.keys(selectedMapRows).length === 0 && !currentSavedMap} onClick={startNewMap}>New map</button>
             <button className="secondary-action" type="button" disabled={(mapSelectionSource === "leads" ? filteredLeadRows.length : Object.keys(selectedMapRows).length) === 0} onClick={() => void saveCurrentMap()}>
               {currentSavedMap ? "Update map" : "Save map"}
             </button>
@@ -6155,8 +6183,8 @@ function CustomerGeographyView({
             <>
               <DataTable
                 className="geography-table"
-                state={{ ...state, data: rows }}
-                emptyMessage="No customers match the current geography filters."
+                state={viewState.onlyMapped ? { data: customerTableRows, loading: false } : { ...state, data: customerTableRows }}
+                emptyMessage={viewState.onlyMapped ? "No customers are currently on the map." : "No customers match the current geography filters."}
                 columns={[
                   "Map",
                   renderSortHeader("Customer", viewState.sortKey === "entityName", viewState.sortDirection, () => handleSort("entityName")),
@@ -6191,12 +6219,14 @@ function CustomerGeographyView({
                   );
                 }}
               />
-              <div className="geography-pagination">
-                <button className="secondary-action" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(current - 1, 1))}>Previous</button>
-                <span>Page {page} of {totalPages}</span>
-                <button className="secondary-action" type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>Next</button>
-                <label><span>Rows</span><select value={pageSize} onChange={(event) => { setPage(1); setPageSize(Number(event.target.value)); }}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option></select></label>
-              </div>
+              {viewState.onlyMapped ? null : (
+                <div className="geography-pagination">
+                  <button className="secondary-action" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(current - 1, 1))}>Previous</button>
+                  <span>Page {page} of {totalPages}</span>
+                  <button className="secondary-action" type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>Next</button>
+                  <label><span>Rows</span><select value={pageSize} onChange={(event) => { setPage(1); setPageSize(Number(event.target.value)); }}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option></select></label>
+                </div>
+              )}
             </>
           )}
         </section>
