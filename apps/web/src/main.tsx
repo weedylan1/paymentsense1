@@ -5502,6 +5502,7 @@ function CustomersView({
   const [archivingDuplicateRows, setArchivingDuplicateRows] = useState(false);
   const customerListScrollRef = useRef<HTMLDivElement | null>(null);
   const duplicateReasonScrollTopRef = useRef(0);
+  const duplicateReasonAnchorRowIdRef = useRef<number | null>(null);
   const restoreDuplicateReasonScrollRef = useRef(false);
 
   useEffect(() => {
@@ -6122,8 +6123,9 @@ function CustomersView({
     }));
   }
 
-  function applyDuplicateReasonFilter(reasonKey: string) {
+  function applyDuplicateReasonFilter(reasonKey: string, anchorCustomerId: number) {
     duplicateReasonScrollTopRef.current = customerListScrollRef.current?.scrollTop ?? 0;
+    duplicateReasonAnchorRowIdRef.current = anchorCustomerId;
     restoreDuplicateReasonScrollRef.current = false;
     setActiveDuplicateReasonKey(reasonKey);
   }
@@ -6153,6 +6155,7 @@ function CustomersView({
       setHiddenDuplicateCustomerIds(new Set());
       setDuplicateReviewMarks({});
       setShowArchiveMarkedOnly(false);
+      duplicateReasonAnchorRowIdRef.current = null;
       restoreDuplicateReasonScrollRef.current = false;
       setDuplicateRefreshKey((current) => current + 1);
     }
@@ -6238,11 +6241,22 @@ function CustomersView({
     }
 
     const frame = requestAnimationFrame(() => {
-      const scrollContainer = customerListScrollRef.current;
-      if (scrollContainer) {
-        scrollContainer.scrollTop = Math.min(duplicateReasonScrollTopRef.current, scrollContainer.scrollHeight);
-      }
-      restoreDuplicateReasonScrollRef.current = false;
+      requestAnimationFrame(() => {
+        const anchorRowId = duplicateReasonAnchorRowIdRef.current;
+        const anchorRow = anchorRowId
+          ? document.querySelector(`[data-customer-row-id="${anchorRowId}"]`) as HTMLElement | null
+          : null;
+        if (anchorRow) {
+          anchorRow.scrollIntoView({ block: "center", behavior: "auto" });
+        } else {
+          const scrollContainer = customerListScrollRef.current;
+          if (scrollContainer) {
+            scrollContainer.scrollTop = Math.min(duplicateReasonScrollTopRef.current, scrollContainer.scrollHeight);
+          }
+        }
+        duplicateReasonAnchorRowIdRef.current = null;
+        restoreDuplicateReasonScrollRef.current = false;
+      });
     });
 
     return () => cancelAnimationFrame(frame);
@@ -6527,7 +6541,7 @@ function CustomersView({
                       className={reason.key === activeDuplicateReasonKey ? "duplicate-reason-badge active" : "duplicate-reason-badge"}
                       key={reason.key}
                       type="button"
-                      onClick={() => applyDuplicateReasonFilter(reason.key)}
+                      onClick={() => applyDuplicateReasonFilter(reason.key, row.id)}
                     >
                       {reason.text}
                     </button>
