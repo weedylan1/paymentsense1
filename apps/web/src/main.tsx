@@ -1357,7 +1357,7 @@ function App() {
 
       </aside>
 
-      <main className="workspace">
+      <main className={activeView === "geography" ? "workspace workspace-geography" : "workspace"}>
         <header className="topbar">
           <div>
             <p className="eyebrow">Manual Test Workspace</p>
@@ -5594,6 +5594,9 @@ function CustomerGeographyView({
   const [currentSavedMap, setCurrentSavedMap] = useState<SavedCustomerMapDetail | null>(null);
   const [mapSelectionSource, setMapSelectionSource] = useState<"customers" | "leads">("customers");
   const [mapExpanded, setMapExpanded] = useState(false);
+  const [saveMapModalOpen, setSaveMapModalOpen] = useState(false);
+  const [saveMapName, setSaveMapName] = useState("");
+  const [savingMap, setSavingMap] = useState(false);
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const leafletMapRef = useRef<L.Map | null>(null);
   const markerLayerRef = useRef<L.LayerGroup | null>(null);
@@ -5831,10 +5834,12 @@ function CustomerGeographyView({
     layer.clearLayers();
 
     for (const row of mappedSelectedRows) {
+      const priority = row.leadPriority ?? "medium";
+      const pulsingClass = pulsingCustomerId === row.id ? " pulsing" : "";
       const marker = L.marker([row.latitude!, row.longitude!], {
         icon: L.divIcon({
-          className: `customer-map-marker priority-${row.leadPriority ?? "medium"}${pulsingCustomerId === row.id ? " pulsing" : ""}`,
-          html: `<span>${escapeHtml(row.entityName.slice(0, 1).toUpperCase())}</span>`,
+          className: "customer-map-pin",
+          html: `<span class="customer-map-marker priority-${priority}${pulsingClass}"><span>${escapeHtml(row.entityName.slice(0, 1).toUpperCase())}</span></span>`,
           iconSize: [30, 30],
           iconAnchor: [15, 15]
         })
@@ -5995,32 +6000,45 @@ function CustomerGeographyView({
     setNotice({ kind: "success", message: "New map started." });
   }
 
-  async function saveCurrentMap() {
+  function openSaveMapModal() {
     const rowsToSave = mapSelectionSource === "leads" ? filteredLeadRows : selectedRows;
-    const customerIds = rowsToSave.map((row) => row.id);
-    if (!customerIds.length) {
+    if (!rowsToSave.length) {
       setNotice({ kind: "error", message: "Select at least one row before saving the map." });
       return;
     }
 
-    const name = currentSavedMap?.name ?? window.prompt("Map name", mapSelectionSource === "leads" ? "Lead geography map" : "Customer geography map");
-    if (!name?.trim()) return;
+    setSaveMapName(currentSavedMap?.name ?? (mapSelectionSource === "leads" ? "Lead geography map" : "Customer geography map"));
+    setSaveMapModalOpen(true);
+  }
 
-    const response = await fetchWithActor(currentSavedMap ? `${apiBase}/api/customer-map/saved/${currentSavedMap.id}` : `${apiBase}/api/customer-map/saved`, {
-      method: currentSavedMap ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim(), customerIds })
-    });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null) as { error?: string } | null;
-      setNotice({ kind: "error", message: payload?.error ?? `HTTP ${response.status}` });
-      return;
+  async function saveCurrentMap(event?: FormEvent) {
+    event?.preventDefault();
+    const rowsToSave = mapSelectionSource === "leads" ? filteredLeadRows : selectedRows;
+    const customerIds = rowsToSave.map((row) => row.id);
+    const name = saveMapName.trim();
+    if (!customerIds.length || !name) return;
+
+    setSavingMap(true);
+    try {
+      const response = await fetchWithActor(currentSavedMap ? `${apiBase}/api/customer-map/saved/${currentSavedMap.id}` : `${apiBase}/api/customer-map/saved`, {
+        method: currentSavedMap ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, customerIds })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        setNotice({ kind: "error", message: payload?.error ?? `HTTP ${response.status}` });
+        return;
+      }
+
+      const saved = await response.json() as SavedCustomerMapDetail;
+      setCurrentSavedMap(saved);
+      setSaveMapModalOpen(false);
+      onSavedMapsChanged();
+      setNotice({ kind: "success", message: `${saved.name} saved.` });
+    } finally {
+      setSavingMap(false);
     }
-
-    const saved = await response.json() as SavedCustomerMapDetail;
-    setCurrentSavedMap(saved);
-    onSavedMapsChanged();
-    setNotice({ kind: "success", message: `${saved.name} saved.` });
   }
 
   async function deleteCurrentMap() {
@@ -6117,7 +6135,7 @@ function CustomerGeographyView({
             <span>{mappedSelectedRows.length} mapped {mapSelectionSource === "leads" ? "leads" : "selections"}</span>
             <button className="secondary-action" type="button" disabled={mappedSelectedRows.length === 0} onClick={fitSelectedMarkers}>Fit selected</button>
             <button className="secondary-action" type="button" disabled={Object.keys(selectedMapRows).length === 0 && !currentSavedMap} onClick={startNewMap}>New map</button>
-            <button className="secondary-action" type="button" disabled={(mapSelectionSource === "leads" ? filteredLeadRows.length : Object.keys(selectedMapRows).length) === 0} onClick={() => void saveCurrentMap()}>
+            <button className="secondary-action" type="button" disabled={(mapSelectionSource === "leads" ? filteredLeadRows.length : Object.keys(selectedMapRows).length) === 0} onClick={openSaveMapModal}>
               {currentSavedMap ? "Update map" : "Save map"}
             </button>
             {currentSavedMap ? (
@@ -6237,6 +6255,41 @@ function CustomerGeographyView({
           <div ref={mapElementRef} className="geography-map" />
         </section>
       </div>
+      {saveMapModalOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel" aria-modal="true" aria-labelledby="geography-save-map-title" role="dialog">
+            <form onSubmit={(event) => void saveCurrentMap(event)}>
+              <div className="modal-header">
+                <div>
+                  <p className="eyebrow">Geography</p>
+                  <h3 id="geography-save-map-title">{currentSavedMap ? "Update map" : "Save map"}</h3>
+                </div>
+                <button className="modal-close" type="button" onClick={() => setSaveMapModalOpen(false)}>
+                  <span aria-hidden>×</span>
+                </button>
+              </div>
+              <div className="modal-body">
+                <div className="table-search">
+                  <label htmlFor="geography-save-map-name">Map name</label>
+                  <input
+                    id="geography-save-map-name"
+                    type="text"
+                    value={saveMapName}
+                    onChange={(event) => setSaveMapName(event.target.value)}
+                    autoFocus
+                  />
+                </div>
+              </div>
+              <div className="modal-actions">
+                <button className="secondary-action" type="button" onClick={() => setSaveMapModalOpen(false)}>Cancel</button>
+                <button className="page-action-button" type="submit" disabled={!saveMapName.trim() || savingMap}>
+                  {savingMap ? "Saving..." : currentSavedMap ? "Update map" : "Save map"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

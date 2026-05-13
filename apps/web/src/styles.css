@@ -148,6 +148,12 @@ button {
   padding: 28px;
 }
 
+.workspace-geography {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .topbar {
   align-items: center;
   display: flex;
@@ -1020,7 +1026,8 @@ button {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  height: calc(100vh - 150px);
+  flex: 1 1 auto;
+  height: auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -1114,6 +1121,12 @@ button {
   width: 100%;
 }
 
+.customer-map-pin {
+  background: transparent;
+  border: 0;
+  overflow: visible;
+}
+
 .customer-map-marker {
   align-items: center;
   background: #007f78;
@@ -1127,6 +1140,8 @@ button {
   justify-content: center;
   overflow: visible;
   position: relative;
+  height: 30px;
+  width: 30px;
 }
 
 .customer-map-marker span {
