@@ -5716,6 +5716,8 @@ function CustomerGeographyView({
         tradingAddress: lead.tradingAddress,
         postcode: lead.postcode,
         status: lead.leadStatus,
+        assignedUserId: lead.assignedUserId,
+        assignedUserName: lead.assignedUserName,
         isBookmarked: false,
         hasStoredMatches: true,
         leadPriority: lead.leadPriority
@@ -5862,6 +5864,14 @@ function CustomerGeographyView({
     }
   }
 
+  function removeMappedLead(row: CustomerMapRow) {
+    setSelectedMapRows((current) => {
+      const next = { ...current };
+      delete next[row.id];
+      return next;
+    });
+  }
+
   async function saveCurrentMap() {
     const customerIds = Object.keys(selectedMapRows).map(Number);
     if (!customerIds.length) {
@@ -5910,70 +5920,72 @@ function CustomerGeographyView({
 
   return (
     <div className="geography-page">
-      <section className="customer-list-options">
-        <div className="customer-filter-row customer-filter-row-primary">
-          <div className="table-search customer-search-wide">
-            <label htmlFor="geography-search">Search customers</label>
-            <input id="geography-search" type="search" value={viewState.searchText} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, searchText: event.target.value })); }} placeholder="Entity, trading name, ref or MID" />
+      {mapSelectionSource === "customers" ? (
+        <section className="customer-list-options">
+          <div className="customer-filter-row customer-filter-row-primary">
+            <div className="table-search customer-search-wide">
+              <label htmlFor="geography-search">Search customers</label>
+              <input id="geography-search" type="search" value={viewState.searchText} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, searchText: event.target.value })); }} placeholder="Entity, trading name, ref or MID" />
+            </div>
+            <div className="table-search customer-search-postcode">
+              <label htmlFor="geography-postcode">Filter by postcode</label>
+              <input id="geography-postcode" type="search" value={viewState.postcodeText ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, postcodeText: event.target.value })); }} placeholder="Postcode" />
+            </div>
+            <div className="customer-inline-filters">
+              <label className="header-filter"><input type="checkbox" checked={viewState.onlyBookmarked ?? false} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyBookmarked: event.target.checked })); }} /><span>Bookmarked only</span></label>
+              <label className="header-filter"><input type="checkbox" checked={viewState.onlyMatched} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyMatched: event.target.checked })); }} /><span>Only with matches</span></label>
+              <label className="header-filter"><input type="checkbox" checked={viewState.onlyCancelled} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyCancelled: event.target.checked })); }} /><span>Cancelled only</span></label>
+              <button className="secondary-action" type="button" onClick={resetFilters}>Reset</button>
+            </div>
           </div>
-          <div className="table-search customer-search-postcode">
-            <label htmlFor="geography-postcode">Filter by postcode</label>
-            <input id="geography-postcode" type="search" value={viewState.postcodeText ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, postcodeText: event.target.value })); }} placeholder="Postcode" />
+          <div className="customer-filter-row customer-filter-row-secondary">
+            <div className="table-search table-search-compact">
+              <label htmlFor="geography-region">Filter by region</label>
+              <select id="geography-region" value={viewState.regionId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, regionId: event.target.value })); }}>
+                <option value="">All regions</option>
+                {regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}
+              </select>
+            </div>
+            <div className="table-search table-search-compact">
+              <label htmlFor="geography-activity">Filter by activity</label>
+              <select id="geography-activity" value={viewState.customerActivityStatusId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, customerActivityStatusId: event.target.value })); }}>
+                <option value="">All activity statuses</option>
+                {customerActivityStatuses.map((status) => <option key={status.id} value={status.id}>{status.name}</option>)}
+              </select>
+            </div>
+            <div className="table-search table-search-compact">
+              <label htmlFor="geography-user">Filter by user</label>
+              <select id="geography-user" value={viewState.assignedUserId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, assignedUserId: event.target.value })); }}>
+                <option value="">All users</option>
+                <option value="__unassigned__">Unassigned</option>
+                {users.map((user) => <option key={user.id} value={user.id}>{user.fullName}</option>)}
+              </select>
+            </div>
+            <label className="table-filter-select" htmlFor="geography-value">
+              <span>Customer value</span>
+              <select id="geography-value" value={viewState.customerValueTypeId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, customerValueTypeId: event.target.value })); }}>
+                <option value="">All customer values</option>
+                <option value="__unassigned__">Unassigned</option>
+                {customerValueTypes.map((valueType) => <option key={valueType.id} value={valueType.id}>{`Shield ${valueType.shieldOrder}${valueType.label ? ` - ${valueType.label}` : ""}`}</option>)}
+              </select>
+            </label>
+            <label className="table-filter-select" htmlFor="geography-priority">
+              <span>Priority</span>
+              <select id="geography-priority" value={viewState.addedFrom || "all"} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, addedFrom: event.target.value })); }}>
+                <option value="all">All priorities</option>
+                {leadPriorityOrder.map((priority) => <option key={priority} value={priority}>{getLeadPriorityLabel(priority)}</option>)}
+              </select>
+            </label>
           </div>
-          <div className="customer-inline-filters">
-            <label className="header-filter"><input type="checkbox" checked={viewState.onlyBookmarked ?? false} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyBookmarked: event.target.checked })); }} /><span>Bookmarked only</span></label>
-            <label className="header-filter"><input type="checkbox" checked={viewState.onlyMatched} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyMatched: event.target.checked })); }} /><span>Only with matches</span></label>
-            <label className="header-filter"><input type="checkbox" checked={viewState.onlyCancelled} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyCancelled: event.target.checked })); }} /><span>Cancelled only</span></label>
-            <button className="secondary-action" type="button" onClick={resetFilters}>Reset</button>
-          </div>
-        </div>
-        <div className="customer-filter-row customer-filter-row-secondary">
-          <div className="table-search table-search-compact">
-            <label htmlFor="geography-region">Filter by region</label>
-            <select id="geography-region" value={viewState.regionId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, regionId: event.target.value })); }}>
-              <option value="">All regions</option>
-              {regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}
-            </select>
-          </div>
-          <div className="table-search table-search-compact">
-            <label htmlFor="geography-activity">Filter by activity</label>
-            <select id="geography-activity" value={viewState.customerActivityStatusId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, customerActivityStatusId: event.target.value })); }}>
-              <option value="">All activity statuses</option>
-              {customerActivityStatuses.map((status) => <option key={status.id} value={status.id}>{status.name}</option>)}
-            </select>
-          </div>
-          <div className="table-search table-search-compact">
-            <label htmlFor="geography-user">Filter by user</label>
-            <select id="geography-user" value={viewState.assignedUserId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, assignedUserId: event.target.value })); }}>
-              <option value="">All users</option>
-              <option value="__unassigned__">Unassigned</option>
-              {users.map((user) => <option key={user.id} value={user.id}>{user.fullName}</option>)}
-            </select>
-          </div>
-          <label className="table-filter-select" htmlFor="geography-value">
-            <span>Customer value</span>
-            <select id="geography-value" value={viewState.customerValueTypeId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, customerValueTypeId: event.target.value })); }}>
-              <option value="">All customer values</option>
-              <option value="__unassigned__">Unassigned</option>
-              {customerValueTypes.map((valueType) => <option key={valueType.id} value={valueType.id}>{`Shield ${valueType.shieldOrder}${valueType.label ? ` - ${valueType.label}` : ""}`}</option>)}
-            </select>
-          </label>
-          <label className="table-filter-select" htmlFor="geography-priority">
-            <span>Priority</span>
-            <select id="geography-priority" value={viewState.addedFrom || "all"} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, addedFrom: event.target.value })); }}>
-              <option value="all">All priorities</option>
-              {leadPriorityOrder.map((priority) => <option key={priority} value={priority}>{getLeadPriorityLabel(priority)}</option>)}
-            </select>
-          </label>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
       {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
 
       <div className={mapExpanded ? "geography-layout geography-layout-map-expanded" : "geography-layout"}>
         <section className="geography-list">
           <div className="geography-list-toolbar">
-            <span>{state.data?.total ?? 0} filtered customers</span>
+            <span>{mapSelectionSource === "leads" ? `${selectedRows.length} selected leads` : `${state.data?.total ?? 0} filtered customers`}</span>
             <span>{mappedSelectedRows.length} mapped {mapSelectionSource === "leads" ? "leads" : "selections"}</span>
             <button className="secondary-action" type="button" disabled={mappedSelectedRows.length === 0} onClick={fitSelectedMarkers}>Fit selected</button>
             {mapSelectionSource === "customers" ? (
@@ -6000,43 +6012,79 @@ function CustomerGeographyView({
               </button>
             )}
           </div>
-          <DataTable
-            className="geography-table"
-            state={{ ...state, data: rows }}
-            emptyMessage="No customers match the current geography filters."
-            columns={["Map", "Customer", "Address", "Postcode", "Status", "Map status"]}
-            renderRow={(row) => {
-              const selected = selectedIds.has(row.id);
-              const mapping = mappingIds.has(row.id);
-              const mapped = typeof row.latitude === "number" && typeof row.longitude === "number";
-              return (
-                <tr key={row.id} className={selected ? "selected" : ""}>
-                  <td><input type="checkbox" checked={selected} onChange={(event) => toggleSelected(row, event.target.checked)} aria-label={`Show ${row.entityName} on map`} /></td>
-                  <td><strong className="stacked">{row.entityName}</strong><span>{row.tradingName ?? row.customerRef ?? row.mid ?? ""}</span></td>
-                  <td className="truncate">{row.tradingAddress ?? ""}</td>
-                  <td className="mono">{row.postcode ?? ""}</td>
-                  <td>{renderCustomerStatus(row.status, "customer", false, false, undefined, 0)}</td>
-                  <td>
-                    {mapping ? (
-                      <Loader2 className="spin" size={16} aria-label="Mapping" />
-                    ) : mapped ? (
-                      <span className="badge">{row.geocodeAccuracy === "approximate" ? "Approximate" : "Mapped"}</span>
-                    ) : row.geocodeStatus === "not_found" ? (
-                      <span className="geography-status-muted">Not found</span>
-                    ) : (
-                      <Globe className="geography-globe-icon" size={17} aria-label="Needs map lookup" />
-                    )}
-                  </td>
-                </tr>
-              );
-            }}
-          />
-          <div className="geography-pagination">
-            <button className="secondary-action" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(current - 1, 1))}>Previous</button>
-            <span>Page {page} of {totalPages}</span>
-            <button className="secondary-action" type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>Next</button>
-            <label><span>Rows</span><select value={pageSize} onChange={(event) => { setPage(1); setPageSize(Number(event.target.value)); }}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option></select></label>
-          </div>
+          {mapSelectionSource === "leads" ? (
+            <DataTable
+              className="geography-table"
+              state={{ data: selectedRows, loading: false }}
+              emptyMessage="No selected leads are loaded on the map."
+              columns={["Map", "Lead", "User", "Address", "Postcode", "Priority", "Map status"]}
+              renderRow={(row) => {
+                const mapping = mappingIds.has(row.id);
+                const mapped = typeof row.latitude === "number" && typeof row.longitude === "number";
+                return (
+                  <tr key={row.id} className="selected">
+                    <td><button className="icon-button" type="button" onClick={() => removeMappedLead(row)} title="Remove from map"><Trash2 size={15} aria-hidden /></button></td>
+                    <td><strong className="stacked">{row.entityName}</strong><span>{row.tradingName ?? row.customerRef ?? row.mid ?? ""}</span></td>
+                    <td>{row.assignedUserName ?? "Unassigned"}</td>
+                    <td className="truncate">{row.tradingAddress ?? ""}</td>
+                    <td className="mono">{row.postcode ?? ""}</td>
+                    <td>{getLeadPriorityLabel(row.leadPriority ?? "medium")}</td>
+                    <td>
+                      {mapping ? (
+                        <Loader2 className="spin" size={16} aria-label="Mapping" />
+                      ) : mapped ? (
+                        <span className="badge">{row.geocodeAccuracy === "approximate" ? "Approximate" : "Mapped"}</span>
+                      ) : row.geocodeStatus === "not_found" ? (
+                        <span className="geography-status-muted">Not found</span>
+                      ) : (
+                        <Globe className="geography-globe-icon" size={17} aria-label="Needs map lookup" />
+                      )}
+                    </td>
+                  </tr>
+                );
+              }}
+            />
+          ) : (
+            <>
+              <DataTable
+                className="geography-table"
+                state={{ ...state, data: rows }}
+                emptyMessage="No customers match the current geography filters."
+                columns={["Map", "Customer", "Address", "Postcode", "Status", "Map status"]}
+                renderRow={(row) => {
+                  const selected = selectedIds.has(row.id);
+                  const mapping = mappingIds.has(row.id);
+                  const mapped = typeof row.latitude === "number" && typeof row.longitude === "number";
+                  return (
+                    <tr key={row.id} className={selected ? "selected" : ""}>
+                      <td><input type="checkbox" checked={selected} onChange={(event) => toggleSelected(row, event.target.checked)} aria-label={`Show ${row.entityName} on map`} /></td>
+                      <td><strong className="stacked">{row.entityName}</strong><span>{row.tradingName ?? row.customerRef ?? row.mid ?? ""}</span></td>
+                      <td className="truncate">{row.tradingAddress ?? ""}</td>
+                      <td className="mono">{row.postcode ?? ""}</td>
+                      <td>{renderCustomerStatus(row.status, "customer", false, false, undefined, 0)}</td>
+                      <td>
+                        {mapping ? (
+                          <Loader2 className="spin" size={16} aria-label="Mapping" />
+                        ) : mapped ? (
+                          <span className="badge">{row.geocodeAccuracy === "approximate" ? "Approximate" : "Mapped"}</span>
+                        ) : row.geocodeStatus === "not_found" ? (
+                          <span className="geography-status-muted">Not found</span>
+                        ) : (
+                          <Globe className="geography-globe-icon" size={17} aria-label="Needs map lookup" />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                }}
+              />
+              <div className="geography-pagination">
+                <button className="secondary-action" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(current - 1, 1))}>Previous</button>
+                <span>Page {page} of {totalPages}</span>
+                <button className="secondary-action" type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>Next</button>
+                <label><span>Rows</span><select value={pageSize} onChange={(event) => { setPage(1); setPageSize(Number(event.target.value)); }}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option></select></label>
+              </div>
+            </>
+          )}
         </section>
         <section className="geography-map-panel">
           <button className="map-expand-button" type="button" onClick={() => setMapExpanded((current) => !current)} title={mapExpanded ? "Show list" : "Expand map"}>
