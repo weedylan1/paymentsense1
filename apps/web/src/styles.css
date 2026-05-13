@@ -1020,18 +1020,23 @@ button {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  height: calc(100vh - 150px);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .geography-layout {
   display: grid;
+  flex: 1 1 auto;
   gap: 16px;
   grid-template-columns: minmax(520px, .92fr) minmax(420px, 1fr);
-  min-height: calc(100vh - 330px);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .geography-list,
 .geography-map-panel {
-  min-height: 520px;
+  min-height: 0;
 }
 
 .geography-list {
@@ -1039,6 +1044,7 @@ button {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .geography-list-toolbar,
@@ -1067,7 +1073,8 @@ button {
 
 .geography-table {
   flex: 1 1 auto;
-  min-height: 390px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .geography-table table {
@@ -1078,12 +1085,14 @@ button {
   background: #ffffff;
   border: 1px solid #dce1df;
   border-radius: 8px;
+  height: 100%;
+  min-width: 0;
   overflow: hidden;
 }
 
 .geography-map {
   height: 100%;
-  min-height: 520px;
+  min-height: 0;
   width: 100%;
 }
 
@@ -1111,8 +1120,22 @@ button {
 }
 
 @media (max-width: 1100px) {
+  .geography-page {
+    height: auto;
+    overflow: visible;
+  }
+
   .geography-layout {
     grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .geography-list {
+    max-height: 520px;
+  }
+
+  .geography-map {
+    min-height: 420px;
   }
 }
 
