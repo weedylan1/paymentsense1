@@ -824,6 +824,7 @@ app.MapGet("/api/customer-map/customers", async (
     bool? onlyBookmarked,
     bool? onlyCancelled,
     bool? onlyMatched,
+    string? leadPriority,
     int? page,
     int? pageSize) =>
 {
@@ -877,6 +878,10 @@ app.MapGet("/api/customer-map/customers", async (
     {
         conditions.Add("ms.customer_id is not null");
     }
+    if (!string.IsNullOrWhiteSpace(leadPriority) && !string.Equals(leadPriority, "all", StringComparison.OrdinalIgnoreCase))
+    {
+        conditions.Add("lp.lead_priority = @lead_priority");
+    }
 
     var whereClause = conditions.Count == 0 ? "" : $"where {string.Join(" and ", conditions)}";
     var sql = $"""
@@ -897,6 +902,13 @@ app.MapGet("/api/customer-map/customers", async (
           select customer_id
           from paymentsense_core.match_candidates
           group by customer_id
+        ),
+        lead_priority_summary as (
+          select distinct on (customer_id)
+            customer_id,
+            lead_priority
+          from paymentsense_core.leads
+          order by customer_id, created_at desc
         ),
         filtered as (
           select
@@ -923,6 +935,7 @@ app.MapGet("/api/customer-map/customers", async (
             gc.longitude,
             gc.accuracy,
             gc.status as geocode_status,
+            lp.lead_priority,
             count(*) over() as total_count
           from paymentsense_core.customers c
           join paymentsense_core.organisations o on o.id = c.organisation_id
@@ -933,6 +946,7 @@ app.MapGet("/api/customer-map/customers", async (
           left join paymentsense_core.users u on u.id = c.assigned_user_id
           left join actor_bookmarks ab on ab.customer_id = c.id
           left join match_summary ms on ms.customer_id = c.id
+          left join lead_priority_summary lp on lp.customer_id = c.id
           left join paymentsense_core.customer_geocode_cache gc on gc.customer_id = c.id
           {whereClause}
         )
@@ -952,13 +966,14 @@ app.MapGet("/api/customer-map/customers", async (
     if (customerActivityStatusId.HasValue) command.Parameters.AddWithValue("customer_activity_status_id", customerActivityStatusId.Value);
     if (customerValueTypeId.HasValue) command.Parameters.AddWithValue("customer_value_type_id", customerValueTypeId.Value);
     if (assignedUserId.HasValue) command.Parameters.AddWithValue("assigned_user_id", assignedUserId.Value);
+    if (!string.IsNullOrWhiteSpace(leadPriority) && !string.Equals(leadPriority, "all", StringComparison.OrdinalIgnoreCase)) command.Parameters.AddWithValue("lead_priority", leadPriority.Trim().ToLowerInvariant());
 
     var rows = new List<CustomerMapRowResponse>();
     var total = 0L;
     await using var reader = await command.ExecuteReaderAsync();
     while (await reader.ReadAsync())
     {
-        total = reader.GetInt64(23);
+        total = reader.GetInt64(24);
         rows.Add(new CustomerMapRowResponse(
             reader.GetInt64(0),
             reader.GetNullableString(1),
@@ -982,7 +997,8 @@ app.MapGet("/api/customer-map/customers", async (
             reader.IsDBNull(19) ? null : reader.GetDouble(19),
             reader.IsDBNull(20) ? null : reader.GetDouble(20),
             reader.GetNullableString(21),
-            reader.GetNullableString(22)));
+            reader.GetNullableString(22),
+            reader.GetNullableString(23)));
     }
 
     return Results.Ok(new CustomerMapPageResponse(rows, total, currentPage, take));
@@ -1006,6 +1022,112 @@ app.MapPost("/api/customer-map/geocode", async (
     }
 
     return Results.Ok(new CustomerMapGeocodeResponse(results));
+});
+
+app.MapGet("/api/customer-map/saved", async (NpgsqlDataSource db) =>
+{
+    await using var command = db.CreateCommand("""
+        select id, name, cardinality(customer_ids), created_at, updated_at
+        from paymentsense_core.customer_geography_maps
+        order by updated_at desc, id desc
+        """);
+    var rows = new List<CustomerMapSavedSummaryResponse>();
+    await using var reader = await command.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+    {
+        rows.Add(new CustomerMapSavedSummaryResponse(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetInt32(2),
+            reader.GetDateTime(3),
+            reader.GetDateTime(4)));
+    }
+
+    return Results.Ok(rows);
+});
+
+app.MapGet("/api/customer-map/saved/{mapId:long}", async (NpgsqlDataSource db, long mapId) =>
+{
+    await using var command = db.CreateCommand("""
+        select id, name, customer_ids, created_at, updated_at
+        from paymentsense_core.customer_geography_maps
+        where id = @id
+        """);
+    command.Parameters.AddWithValue("id", mapId);
+    await using var reader = await command.ExecuteReaderAsync();
+    if (!await reader.ReadAsync())
+    {
+        return Results.NotFound(new { error = "Saved map not found." });
+    }
+
+    var customerIds = reader.GetFieldValue<long[]>(2);
+    return Results.Ok(new CustomerMapSavedDetailResponse(
+        reader.GetInt64(0),
+        reader.GetString(1),
+        customerIds,
+        reader.GetDateTime(3),
+        reader.GetDateTime(4)));
+});
+
+app.MapPost("/api/customer-map/saved", async (NpgsqlDataSource db, CustomerMapSaveRequest request) =>
+{
+    var name = string.IsNullOrWhiteSpace(request.Name) ? "Untitled map" : request.Name.Trim();
+    var customerIds = request.CustomerIds?.Distinct().ToArray() ?? [];
+    await using var command = db.CreateCommand("""
+        insert into paymentsense_core.customer_geography_maps (name, customer_ids)
+        values (@name, @customer_ids)
+        returning id, name, customer_ids, created_at, updated_at
+        """);
+    command.Parameters.AddWithValue("name", name);
+    command.Parameters.AddWithValue("customer_ids", customerIds);
+    await using var reader = await command.ExecuteReaderAsync();
+    await reader.ReadAsync();
+    return Results.Ok(new CustomerMapSavedDetailResponse(
+        reader.GetInt64(0),
+        reader.GetString(1),
+        reader.GetFieldValue<long[]>(2),
+        reader.GetDateTime(3),
+        reader.GetDateTime(4)));
+});
+
+app.MapPut("/api/customer-map/saved/{mapId:long}", async (NpgsqlDataSource db, long mapId, CustomerMapSaveRequest request) =>
+{
+    var name = string.IsNullOrWhiteSpace(request.Name) ? "Untitled map" : request.Name.Trim();
+    var customerIds = request.CustomerIds?.Distinct().ToArray() ?? [];
+    await using var command = db.CreateCommand("""
+        update paymentsense_core.customer_geography_maps
+        set name = @name,
+            customer_ids = @customer_ids,
+            updated_at = now()
+        where id = @id
+        returning id, name, customer_ids, created_at, updated_at
+        """);
+    command.Parameters.AddWithValue("id", mapId);
+    command.Parameters.AddWithValue("name", name);
+    command.Parameters.AddWithValue("customer_ids", customerIds);
+    await using var reader = await command.ExecuteReaderAsync();
+    if (!await reader.ReadAsync())
+    {
+        return Results.NotFound(new { error = "Saved map not found." });
+    }
+
+    return Results.Ok(new CustomerMapSavedDetailResponse(
+        reader.GetInt64(0),
+        reader.GetString(1),
+        reader.GetFieldValue<long[]>(2),
+        reader.GetDateTime(3),
+        reader.GetDateTime(4)));
+});
+
+app.MapDelete("/api/customer-map/saved/{mapId:long}", async (NpgsqlDataSource db, long mapId) =>
+{
+    await using var command = db.CreateCommand("""
+        delete from paymentsense_core.customer_geography_maps
+        where id = @id
+        """);
+    command.Parameters.AddWithValue("id", mapId);
+    var deleted = await command.ExecuteNonQueryAsync();
+    return Results.Ok(new { deleted = deleted > 0 });
 });
 
 app.MapPost("/api/customers/{customerId:long}/bookmark", async (NpgsqlDataSource db, HttpRequest httpRequest, long customerId) =>
@@ -8985,11 +9107,14 @@ internal sealed record PaymentsenseAuthStatusResponse(bool Authenticated, string
 internal sealed record ProspectResponse(long Id, string ProspectId, string BusinessName, DateTime AddedAt, DateOnly? CreatedOn, string? OwnerName, bool? HasPaymentsenseCustomerMatch, string? ContactName, string? ContactEmail, string? Postcode, string? Channel, string? Origin, string? AddressLine1, string? Town, string? County, string? ContactPhone, bool HasStoredDetail, bool HasLead);
 internal sealed record CustomerResponse(long Id, string CustomerKind, string? CustomerRef, string? Mid, DateTime AddedAt, string EntityName, string? TradingName, string? TradingAddress, string? Postcode, DateOnly? StartDate, string? Status, string? SuppressionReason, long? RegionId, string? RegionName, long? CustomerActivityStatusId, string? CustomerActivityStatusName, long? CustomerValueTypeId, string? CustomerValueTypeLabel, decimal? CustomerValueTypeDecimalValue, int? CustomerValueTypeShieldOrder, string? CustomerValueTypeImageFileName, long? AssignedUserId, string? AssignedUserName, bool IsBookmarked, bool HasAnyBookmark, bool HasNotes, bool HasOwnedChecklistMatch, bool HasStoredMatches, int AttachedProspectCount, bool HasLead, bool HasAiInsight, bool HasAiInsightJobScheduled);
 internal sealed record CustomerMapPageResponse(IReadOnlyList<CustomerMapRowResponse> Items, long Total, int Page, int PageSize);
-internal sealed record CustomerMapRowResponse(long Id, string? CustomerRef, string? Mid, DateTime AddedAt, string EntityName, string? TradingName, string? TradingAddress, string? Postcode, string? Status, long? RegionId, string? RegionName, long? CustomerActivityStatusId, string? CustomerActivityStatusName, long? CustomerValueTypeId, string? CustomerValueTypeLabel, long? AssignedUserId, string? AssignedUserName, bool IsBookmarked, bool HasStoredMatches, double? Latitude, double? Longitude, string? GeocodeAccuracy, string? GeocodeStatus);
+internal sealed record CustomerMapRowResponse(long Id, string? CustomerRef, string? Mid, DateTime AddedAt, string EntityName, string? TradingName, string? TradingAddress, string? Postcode, string? Status, long? RegionId, string? RegionName, long? CustomerActivityStatusId, string? CustomerActivityStatusName, long? CustomerValueTypeId, string? CustomerValueTypeLabel, long? AssignedUserId, string? AssignedUserName, bool IsBookmarked, bool HasStoredMatches, double? Latitude, double? Longitude, string? GeocodeAccuracy, string? GeocodeStatus, string? LeadPriority);
 internal sealed record CustomerMapGeocodeRequest(IReadOnlyList<long> CustomerIds);
 internal sealed record CustomerMapGeocodeResponse(IReadOnlyList<CustomerMapGeocodeResult> Results);
 internal sealed record CustomerMapGeocodeResult(long CustomerId, string Status, double? Latitude, double? Longitude, string? Accuracy, string? Error);
 internal sealed record CustomerMapGeocodeSource(long CustomerId, string QueryText, string? FallbackQueryText, string AddressKey);
+internal sealed record CustomerMapSaveRequest(string? Name, IReadOnlyList<long>? CustomerIds);
+internal sealed record CustomerMapSavedSummaryResponse(long Id, string Name, int CustomerCount, DateTime CreatedAt, DateTime UpdatedAt);
+internal sealed record CustomerMapSavedDetailResponse(long Id, string Name, IReadOnlyList<long> CustomerIds, DateTime CreatedAt, DateTime UpdatedAt);
 internal sealed record CustomerSearchRequest(string Query, bool PersistToDatabase = true, long? RegionId = null);
 internal sealed record ProspectSearchRequest(string Query, bool PersistToDatabase = true);
 internal sealed record CustomerSearchPreviewResponse(string Query, string SearchUrl, IReadOnlyList<CustomerSearchRowResponse> Rows);

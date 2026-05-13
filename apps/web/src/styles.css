@@ -1034,6 +1034,14 @@ button {
   overflow: hidden;
 }
 
+.geography-layout-map-expanded {
+  grid-template-columns: 1fr;
+}
+
+.geography-layout-map-expanded .geography-list {
+  display: none;
+}
+
 .geography-list,
 .geography-map-panel {
   min-height: 0;
@@ -1088,6 +1096,7 @@ button {
   height: 100%;
   min-width: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .geography-map {
@@ -1113,10 +1122,68 @@ button {
   line-height: 1;
 }
 
+.customer-map-marker.priority-very_low {
+  background: #6b7280;
+}
+
+.customer-map-marker.priority-low {
+  background: #2563eb;
+}
+
+.customer-map-marker.priority-medium {
+  background: #007f78;
+}
+
+.customer-map-marker.priority-high {
+  background: #d97706;
+}
+
+.customer-map-marker.priority-urgent {
+  background: #dc2626;
+}
+
 .geography-status-muted {
   color: #66706b;
   font-size: 12px;
   font-weight: 700;
+}
+
+.geography-globe-icon {
+  color: #66706b;
+  display: block;
+}
+
+.map-expand-button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #cfd7d3;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+  color: #202124;
+  cursor: pointer;
+  display: inline-flex;
+  height: 36px;
+  justify-content: center;
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  width: 36px;
+  z-index: 500;
+}
+
+.map-expand-button:hover {
+  border-color: #00928a;
+  color: #03655d;
+}
+
+.geography-saved-list {
+  margin: -4px 0 8px 28px;
+}
+
+.saved-map-nav-row .nav-item {
+  font-size: 12px;
+  min-height: 30px;
+  padding-left: 10px;
 }
 
 @media (max-width: 1100px) {

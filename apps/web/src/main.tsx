@@ -259,6 +259,7 @@ type CustomerMapRow = {
   longitude?: number;
   geocodeAccuracy?: string;
   geocodeStatus?: string;
+  leadPriority?: LeadPriority;
 };
 
 type CustomerMapGeocodeResponse = {
@@ -272,6 +273,22 @@ type CustomerMapGeocodeResult = {
   longitude?: number;
   accuracy?: string;
   error?: string;
+};
+
+type SavedCustomerMap = {
+  id: number;
+  name: string;
+  customerCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type SavedCustomerMapDetail = {
+  id: number;
+  name: string;
+  customerIds: number[];
+  createdAt: string;
+  updatedAt: string;
 };
 
 type CustomerNote = {
@@ -896,6 +913,7 @@ function App() {
   const gdpr = useApi<GdprEntry[]>("/api/gdpr", refreshKey);
   const users = useApi<User[]>("/api/users", refreshKey);
   const campaigns = useApi<Campaign[]>("/api/campaigns", refreshKey);
+  const savedCustomerMaps = useApi<SavedCustomerMap[]>("/api/customer-map/saved", refreshKey);
   const activityEvents = useActivityEvents(refreshKey, currentUserId);
   const [customerTest, setCustomerTest] = useState<CustomerTestState>({
     query: "",
@@ -1000,6 +1018,8 @@ function App() {
     sortKey: "entityName",
     sortDirection: "asc"
   });
+  const [customerMapLoadRequest, setCustomerMapLoadRequest] = useState<number | null>(null);
+  const [customerMapLeadRequest, setCustomerMapLeadRequest] = useState<Lead[] | null>(null);
   const [prospectCleanseViewState, setProspectCleanseViewState] = useState<ProspectPageViewState>({
     searchText: "",
     searchDetails: false,
@@ -1271,6 +1291,27 @@ function App() {
             );
           })}
 
+          {savedCustomerMaps.data?.length ? (
+            <div className="nav-sublist geography-saved-list">
+              {savedCustomerMaps.data.map((map) => (
+                <div className="saved-map-nav-row" key={map.id}>
+                  <button
+                    className={activeView === "geography" && customerMapLoadRequest === map.id ? "nav-item active" : "nav-item"}
+                    onClick={() => {
+                      setCustomerMapLoadRequest(map.id);
+                      navigateToView("geography");
+                    }}
+                    type="button"
+                    title={`${map.customerCount} customer${map.customerCount === 1 ? "" : "s"}`}
+                  >
+                    <MapPin size={15} aria-hidden />
+                    <span>{map.name}</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div className="nav-group">
             <button
               className="nav-group-label nav-group-toggle"
@@ -1525,6 +1566,10 @@ function App() {
             onRemoveLead={() => refreshData()}
             viewState={leadViewState}
             onViewStateChange={setLeadViewState}
+            onOpenSelectedLeadsMap={(leadRows) => {
+              setCustomerMapLeadRequest(leadRows);
+              navigateToView("geography");
+            }}
           />
         )}
         {activeView.startsWith("lead:") && (
@@ -1556,6 +1601,11 @@ function App() {
             users={users.data ?? []}
             viewState={customerMapViewState}
             onViewStateChange={setCustomerMapViewState}
+            savedMapIdToLoad={customerMapLoadRequest}
+            onSavedMapLoaded={() => setCustomerMapLoadRequest(null)}
+            leadRowsToLoad={customerMapLeadRequest}
+            onLeadRowsLoaded={() => setCustomerMapLeadRequest(null)}
+            onSavedMapsChanged={refreshData}
           />
         )}
         {activeView === "compliance" && (
@@ -5503,7 +5553,12 @@ function CustomerGeographyView({
   customerValueTypes,
   users,
   viewState,
-  onViewStateChange
+  onViewStateChange,
+  savedMapIdToLoad,
+  onSavedMapLoaded,
+  leadRowsToLoad,
+  onLeadRowsLoaded,
+  onSavedMapsChanged
 }: {
   regions: Region[];
   customerActivityStatuses: CustomerActivityStatusOption[];
@@ -5511,14 +5566,22 @@ function CustomerGeographyView({
   users: User[];
   viewState: CustomerPageViewState;
   onViewStateChange: Dispatch<SetStateAction<CustomerPageViewState>>;
+  savedMapIdToLoad: number | null;
+  onSavedMapLoaded: () => void;
+  leadRowsToLoad: Lead[] | null;
+  onLeadRowsLoaded: () => void;
+  onSavedMapsChanged: () => void;
 }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [state, setState] = useState<LoadState<CustomerMapPage>>({ loading: true });
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
+  const [selectedMapRows, setSelectedMapRows] = useState<Record<number, CustomerMapRow>>(() => ({}));
   const [coordinateOverrides, setCoordinateOverrides] = useState<Record<number, Pick<CustomerMapRow, "latitude" | "longitude" | "geocodeAccuracy" | "geocodeStatus">>>({});
   const [mappingIds, setMappingIds] = useState<Set<number>>(() => new Set());
   const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+  const [currentSavedMap, setCurrentSavedMap] = useState<SavedCustomerMapDetail | null>(null);
+  const [mapSelectionSource, setMapSelectionSource] = useState<"customers" | "leads">("customers");
+  const [mapExpanded, setMapExpanded] = useState(false);
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const leafletMapRef = useRef<L.Map | null>(null);
   const markerLayerRef = useRef<L.LayerGroup | null>(null);
@@ -5542,6 +5605,7 @@ function CustomerGeographyView({
     if (viewState.onlyBookmarked) params.set("onlyBookmarked", "true");
     if (viewState.onlyCancelled) params.set("onlyCancelled", "true");
     if (viewState.onlyMatched) params.set("onlyMatched", "true");
+    if (viewState.addedFrom && viewState.addedFrom !== "all") params.set("leadPriority", viewState.addedFrom);
     return params.toString();
   }, [page, pageSize, viewState]);
 
@@ -5580,8 +5644,98 @@ function CustomerGeographyView({
     };
   }, []);
 
+  useEffect(() => {
+    const saved = window.localStorage.getItem("matchlab.geography.selection");
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved) as Record<number, CustomerMapRow>;
+      setSelectedMapRows(parsed ?? {});
+      const savedSource = window.localStorage.getItem("matchlab.geography.selectionSource");
+      if (savedSource === "leads" || savedSource === "customers") setMapSelectionSource(savedSource);
+    } catch {
+      window.localStorage.removeItem("matchlab.geography.selection");
+      window.localStorage.removeItem("matchlab.geography.selectionSource");
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("matchlab.geography.selection", JSON.stringify(selectedMapRows));
+    window.localStorage.setItem("matchlab.geography.selectionSource", mapSelectionSource);
+  }, [selectedMapRows, mapSelectionSource]);
+
+  useEffect(() => {
+    if (!savedMapIdToLoad) return;
+    let cancelled = false;
+    fetchWithActor(`${apiBase}/api/customer-map/saved/${savedMapIdToLoad}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.json() as SavedCustomerMapDetail;
+      })
+      .then(async (map) => {
+        if (cancelled) return;
+        setCurrentSavedMap(map);
+        setMapSelectionSource("customers");
+        const nextRows: Record<number, CustomerMapRow> = {};
+        for (const customerId of map.customerIds) {
+          nextRows[customerId] = {
+            id: customerId,
+            addedAt: "",
+            entityName: `Customer ${customerId}`,
+            isBookmarked: false,
+            hasStoredMatches: false
+          };
+        }
+        setSelectedMapRows(nextRows);
+        await geocodeRows(map.customerIds);
+        setNotice({ kind: "success", message: `${map.name} loaded.` });
+        onSavedMapLoaded();
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setNotice({ kind: "error", message: error instanceof Error ? error.message : "Could not load saved map." });
+          onSavedMapLoaded();
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [savedMapIdToLoad]);
+
+  useEffect(() => {
+    if (!leadRowsToLoad?.length) return;
+
+    const nextRows: Record<number, CustomerMapRow> = {};
+    for (const lead of leadRowsToLoad) {
+      nextRows[lead.customerId] = {
+        id: lead.customerId,
+        customerRef: lead.customerRef,
+        mid: lead.mid,
+        addedAt: lead.createdAt,
+        entityName: lead.customerName,
+        tradingName: lead.tradingName,
+        tradingAddress: lead.tradingAddress,
+        postcode: lead.postcode,
+        status: lead.leadStatus,
+        isBookmarked: false,
+        hasStoredMatches: true,
+        leadPriority: lead.leadPriority
+      };
+    }
+
+    setCurrentSavedMap(null);
+    setMapSelectionSource("leads");
+    setSelectedMapRows(nextRows);
+    void geocodeRows(leadRowsToLoad.map((lead) => lead.customerId));
+    setNotice({
+      kind: "success",
+      message: `${leadRowsToLoad.length} selected lead${leadRowsToLoad.length === 1 ? "" : "s"} loaded on the map.`
+    });
+    onLeadRowsLoaded();
+  }, [leadRowsToLoad]);
+
   const rows = state.data?.items.map((row) => ({ ...row, ...(coordinateOverrides[row.id] ?? {}) })) ?? [];
-  const selectedRows = rows.filter((row) => selectedIds.has(row.id));
+  const selectedIds = useMemo(() => new Set(Object.keys(selectedMapRows).map(Number)), [selectedMapRows]);
+  const selectedRows = Object.values(selectedMapRows).map((row) => ({ ...row, ...(coordinateOverrides[row.id] ?? {}) }));
   const mappedSelectedRows = selectedRows.filter((row) => typeof row.latitude === "number" && typeof row.longitude === "number");
   const totalPages = Math.max(Math.ceil((state.data?.total ?? 0) / pageSize), 1);
 
@@ -5593,7 +5747,7 @@ function CustomerGeographyView({
     for (const row of mappedSelectedRows) {
       const marker = L.marker([row.latitude!, row.longitude!], {
         icon: L.divIcon({
-          className: "customer-map-marker",
+          className: `customer-map-marker priority-${row.leadPriority ?? "medium"}`,
           html: `<span>${escapeHtml(row.entityName.slice(0, 1).toUpperCase())}</span>`,
           iconSize: [30, 30],
           iconAnchor: [15, 15]
@@ -5658,6 +5812,26 @@ function CustomerGeographyView({
         }
         return next;
       });
+      setSelectedMapRows((current) => {
+        const next = { ...current };
+        for (const result of payload.results) {
+          const existing = next[result.customerId] ?? {
+            id: result.customerId,
+            addedAt: "",
+            entityName: `Customer ${result.customerId}`,
+            isBookmarked: false,
+            hasStoredMatches: false
+          };
+          next[result.customerId] = {
+            ...existing,
+            latitude: result.latitude,
+            longitude: result.longitude,
+            geocodeAccuracy: result.accuracy,
+            geocodeStatus: result.status
+          };
+        }
+        return next;
+      });
       const failed = payload.results.filter((result) => result.status !== "mapped");
       if (failed.length) {
         setNotice({ kind: "error", message: `${failed.length} selected customer location${failed.length === 1 ? "" : "s"} could not be mapped.` });
@@ -5674,16 +5848,57 @@ function CustomerGeographyView({
   }
 
   function toggleSelected(row: CustomerMapRow, checked: boolean) {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (checked) next.add(row.id);
-      else next.delete(row.id);
+    setSelectedMapRows((current) => {
+      const next = { ...current };
+      if (checked) next[row.id] = { ...row, ...(coordinateOverrides[row.id] ?? {}) };
+      else delete next[row.id];
       return next;
     });
+    setMapSelectionSource("customers");
+    setCurrentSavedMap(null);
 
     if (checked && !(typeof row.latitude === "number" && typeof row.longitude === "number")) {
       void geocodeRows([row.id]);
     }
+  }
+
+  async function saveCurrentMap() {
+    const customerIds = Object.keys(selectedMapRows).map(Number);
+    if (!customerIds.length) {
+      setNotice({ kind: "error", message: "Select at least one customer before saving the map." });
+      return;
+    }
+
+    const name = currentSavedMap?.name ?? window.prompt("Map name", "Customer geography map");
+    if (!name?.trim()) return;
+
+    const response = await fetchWithActor(currentSavedMap ? `${apiBase}/api/customer-map/saved/${currentSavedMap.id}` : `${apiBase}/api/customer-map/saved`, {
+      method: currentSavedMap ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim(), customerIds })
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      setNotice({ kind: "error", message: payload?.error ?? `HTTP ${response.status}` });
+      return;
+    }
+
+    const saved = await response.json() as SavedCustomerMapDetail;
+    setCurrentSavedMap(saved);
+    onSavedMapsChanged();
+    setNotice({ kind: "success", message: `${saved.name} saved.` });
+  }
+
+  async function deleteCurrentMap() {
+    if (!currentSavedMap) return;
+    const response = await fetchWithActor(`${apiBase}/api/customer-map/saved/${currentSavedMap.id}`, { method: "DELETE" });
+    if (!response.ok) {
+      setNotice({ kind: "error", message: `Could not delete ${currentSavedMap.name}.` });
+      return;
+    }
+    setNotice({ kind: "success", message: `${currentSavedMap.name} deleted.` });
+    setCurrentSavedMap(null);
+    onSavedMapsChanged();
   }
 
   function fitSelectedMarkers() {
@@ -5743,17 +5958,47 @@ function CustomerGeographyView({
               {customerValueTypes.map((valueType) => <option key={valueType.id} value={valueType.id}>{`Shield ${valueType.shieldOrder}${valueType.label ? ` - ${valueType.label}` : ""}`}</option>)}
             </select>
           </label>
+          <label className="table-filter-select" htmlFor="geography-priority">
+            <span>Priority</span>
+            <select id="geography-priority" value={viewState.addedFrom || "all"} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, addedFrom: event.target.value })); }}>
+              <option value="all">All priorities</option>
+              {leadPriorityOrder.map((priority) => <option key={priority} value={priority}>{getLeadPriorityLabel(priority)}</option>)}
+            </select>
+          </label>
         </div>
       </section>
 
       {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
 
-      <div className="geography-layout">
+      <div className={mapExpanded ? "geography-layout geography-layout-map-expanded" : "geography-layout"}>
         <section className="geography-list">
           <div className="geography-list-toolbar">
             <span>{state.data?.total ?? 0} filtered customers</span>
-            <span>{mappedSelectedRows.length} mapped selections</span>
+            <span>{mappedSelectedRows.length} mapped {mapSelectionSource === "leads" ? "leads" : "selections"}</span>
             <button className="secondary-action" type="button" disabled={mappedSelectedRows.length === 0} onClick={fitSelectedMarkers}>Fit selected</button>
+            {mapSelectionSource === "customers" ? (
+              <>
+                <button className="secondary-action" type="button" disabled={Object.keys(selectedMapRows).length === 0} onClick={() => void saveCurrentMap()}>
+                  {currentSavedMap ? "Update map" : "Save map"}
+                </button>
+                {currentSavedMap ? (
+                  <button className="secondary-action destructive-action" type="button" onClick={() => void deleteCurrentMap()}>
+                    Delete map
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => {
+                  setSelectedMapRows({});
+                  setMapSelectionSource("customers");
+                }}
+              >
+                Clear lead map
+              </button>
+            )}
           </div>
           <DataTable
             className="geography-table"
@@ -5771,7 +6016,17 @@ function CustomerGeographyView({
                   <td className="truncate">{row.tradingAddress ?? ""}</td>
                   <td className="mono">{row.postcode ?? ""}</td>
                   <td>{renderCustomerStatus(row.status, "customer", false, false, undefined, 0)}</td>
-                  <td><span className={mapped ? "badge" : "geography-status-muted"}>{mapping ? "Mapping..." : mapped ? (row.geocodeAccuracy === "approximate" ? "Approximate" : "Mapped") : row.geocodeStatus === "not_found" ? "Not found" : "Needs map lookup"}</span></td>
+                  <td>
+                    {mapping ? (
+                      <Loader2 className="spin" size={16} aria-label="Mapping" />
+                    ) : mapped ? (
+                      <span className="badge">{row.geocodeAccuracy === "approximate" ? "Approximate" : "Mapped"}</span>
+                    ) : row.geocodeStatus === "not_found" ? (
+                      <span className="geography-status-muted">Not found</span>
+                    ) : (
+                      <Globe className="geography-globe-icon" size={17} aria-label="Needs map lookup" />
+                    )}
+                  </td>
                 </tr>
               );
             }}
@@ -5784,6 +6039,9 @@ function CustomerGeographyView({
           </div>
         </section>
         <section className="geography-map-panel">
+          <button className="map-expand-button" type="button" onClick={() => setMapExpanded((current) => !current)} title={mapExpanded ? "Show list" : "Expand map"}>
+            {mapExpanded ? <ArrowRight size={18} aria-hidden /> : <ExternalLink size={18} aria-hidden />}
+          </button>
           <div ref={mapElementRef} className="geography-map" />
         </section>
       </div>
@@ -8443,7 +8701,8 @@ function LeadsView({
   onOpenLead,
   onRemoveLead,
   viewState,
-  onViewStateChange
+  onViewStateChange,
+  onOpenSelectedLeadsMap
 }: {
   state: LoadState<Lead[]>;
   users: User[];
@@ -8453,6 +8712,7 @@ function LeadsView({
   onRemoveLead: () => void;
   viewState: LeadViewState;
   onViewStateChange: Dispatch<SetStateAction<LeadViewState>>;
+  onOpenSelectedLeadsMap: (leads: Lead[]) => void;
 }) {
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<number>>(() => new Set());
   const [notice, setNotice] = useState<ArchiveNotice | null>(null);
@@ -8519,6 +8779,7 @@ function LeadsView({
   const visibleLeadIds = filteredLeads?.map((row) => row.id) ?? [];
   const selectedVisibleCount = visibleLeadIds.filter((id) => selectedLeadIds.has(id)).length;
   const allVisibleSelected = visibleLeadIds.length > 0 && selectedVisibleCount === visibleLeadIds.length;
+  const selectedVisibleLeads = filteredLeads?.filter((lead) => selectedLeadIds.has(lead.id)) ?? [];
 
   function toggleSelectAllVisible(checked: boolean) {
     setSelectedLeadIds((current) => {
@@ -8756,6 +9017,14 @@ function LeadsView({
             onClick={() => void addSelectedLeadsToWave()}
           >
             Add Leads To Wave
+          </button>
+          <button
+            className="secondary-action"
+            type="button"
+            disabled={selectedVisibleLeads.length === 0}
+            onClick={() => onOpenSelectedLeadsMap(selectedVisibleLeads)}
+          >
+            View Selected On Map
           </button>
           <button className="secondary-action" type="button" onClick={downloadCsv}>
             Download CSV
