@@ -148,7 +148,7 @@ button {
   padding: 28px;
 }
 
-.workspace-geography {
+.workspace-scroll-contained {
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -884,8 +884,18 @@ button {
   min-height: calc(100vh - 190px);
 }
 
+.workspace-scroll-contained .customer-page-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .customer-page-layout-options-hidden {
   min-height: calc(100vh - 150px);
+}
+
+.workspace-scroll-contained .customer-page-layout-options-hidden {
+  min-height: 0;
 }
 
 .customer-list-options {
@@ -1014,12 +1024,16 @@ button {
 
 .customer-list-scroll {
   flex: 1 1 auto;
-  min-height: 360px;
+  min-height: 0;
   overflow: auto;
 }
 
 .customer-list-scroll-expanded {
   min-height: calc(100vh - 190px);
+}
+
+.workspace-scroll-contained .customer-list-scroll-expanded {
+  min-height: 0;
 }
 
 .geography-page {

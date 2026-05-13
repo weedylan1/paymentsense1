@@ -1357,7 +1357,7 @@ function App() {
 
       </aside>
 
-      <main className={activeView === "geography" ? "workspace workspace-geography" : "workspace"}>
+      <main className={activeView === "geography" || activeView === "customers" || activeView === "customer-dedupe" ? "workspace workspace-scroll-contained" : "workspace"}>
         <header className="topbar">
           <div>
             <p className="eyebrow">Manual Test Workspace</p>
