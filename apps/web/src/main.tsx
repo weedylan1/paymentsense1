@@ -6251,6 +6251,8 @@ function CustomerGeographyView({
                         <span className="badge">{row.geocodeAccuracy === "approximate" ? "Approximate" : "Mapped"}</span>
                       ) : row.geocodeStatus === "not_found" ? (
                         <span className="geography-status-muted">Not found</span>
+                      ) : row.geocodeStatus === "error" ? (
+                        <span className="geography-status-muted">Lookup failed</span>
                       ) : (
                         <Globe className="geography-globe-icon" size={17} aria-label="Needs map lookup" />
                       )}
@@ -6291,6 +6293,8 @@ function CustomerGeographyView({
                           <span className="badge">{row.geocodeAccuracy === "approximate" ? "Approximate" : "Mapped"}</span>
                         ) : row.geocodeStatus === "not_found" ? (
                           <span className="geography-status-muted">Not found</span>
+                        ) : row.geocodeStatus === "error" ? (
+                          <span className="geography-status-muted">Lookup failed</span>
                         ) : (
                           <Globe className="geography-globe-icon" size={17} aria-label="Needs map lookup" />
                         )}

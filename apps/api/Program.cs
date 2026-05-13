@@ -8887,6 +8887,9 @@ internal static class DataReaderExtensions
 
 internal static class CustomerMapGeocoder
 {
+private static readonly SemaphoreSlim NominatimThrottle = new(1, 1);
+private static DateTimeOffset LastNominatimRequestAt = DateTimeOffset.MinValue;
+
 public static async Task<CustomerMapGeocodeResult> GeocodeCustomerForMapAsync(NpgsqlDataSource db, IHttpClientFactory httpClientFactory, long customerId)
 {
     var source = await LoadCustomerMapGeocodeSourceAsync(db, customerId);
@@ -8921,11 +8924,10 @@ public static async Task<CustomerMapGeocodeResult> GeocodeCustomerForMapAsync(Np
         {
             var geocodeQuery = query!;
             var url = $"https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=gb&q={Uri.EscapeDataString(geocodeQuery)}";
-            using var response = await client.GetAsync(url);
+            using var response = await SendNominatimRequestAsync(client, url);
             if (!response.IsSuccessStatusCode)
             {
                 var message = $"Geocoder returned HTTP {(int)response.StatusCode}.";
-                await SaveCustomerMapGeocodeAsync(db, customerId, source.AddressKey, geocodeQuery, null, null, "unknown", "error", message);
                 return new CustomerMapGeocodeResult(customerId, "error", null, null, "unknown", message);
             }
 
@@ -8966,8 +8968,38 @@ public static async Task<CustomerMapGeocodeResult> GeocodeCustomerForMapAsync(Np
     }
     catch (Exception ex)
     {
-        await SaveCustomerMapGeocodeAsync(db, customerId, source.AddressKey, source.QueryText, null, null, "unknown", "error", ex.Message);
         return new CustomerMapGeocodeResult(customerId, "error", null, null, "unknown", ex.Message);
+    }
+}
+
+static async Task<HttpResponseMessage> SendNominatimRequestAsync(HttpClient client, string url)
+{
+    await NominatimThrottle.WaitAsync();
+    try
+    {
+        var sinceLastRequest = DateTimeOffset.UtcNow - LastNominatimRequestAt;
+        var delay = TimeSpan.FromMilliseconds(1200) - sinceLastRequest;
+        if (delay > TimeSpan.Zero)
+        {
+            await Task.Delay(delay);
+        }
+
+        var response = await client.GetAsync(url);
+        LastNominatimRequestAt = DateTimeOffset.UtcNow;
+        if ((int)response.StatusCode != 429)
+        {
+            return response;
+        }
+
+        response.Dispose();
+        await Task.Delay(TimeSpan.FromSeconds(3));
+        var retryResponse = await client.GetAsync(url);
+        LastNominatimRequestAt = DateTimeOffset.UtcNow;
+        return retryResponse;
+    }
+    finally
+    {
+        NominatimThrottle.Release();
     }
 }
 
