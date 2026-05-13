@@ -6119,6 +6119,30 @@ function CustomersView({
     }));
   }
 
+  function resetCustomerListView() {
+    onViewStateChange({
+      searchText: "",
+      postcodeText: "",
+      regionId: "",
+      customerActivityStatusId: "",
+      customerValueTypeId: "",
+      assignedUserId: "",
+      onlyBookmarked: false,
+      onlyCancelled: duplicateMode ? false : true,
+      onlyMatched: false,
+      sortKey: duplicateMode ? "entityName" : "addedAt",
+      sortDirection: duplicateMode ? "asc" : "desc"
+    });
+
+    if (duplicateMode) {
+      setActiveDuplicateReasonKey(null);
+      setHiddenDuplicateCustomerIds(new Set());
+      setDuplicateReviewMarks({});
+      setShowArchiveMarkedOnly(false);
+      setDuplicateRefreshKey((current) => current + 1);
+    }
+  }
+
   function removeMarkedDuplicateRows() {
     const markedIds = Object.entries(duplicateReviewMarks)
       .filter(([, mark]) => Boolean(mark))
@@ -6246,21 +6270,7 @@ function CustomersView({
               <button
                 className="secondary-action"
                 type="button"
-                  onClick={() =>
-                    onViewStateChange({
-                      searchText: "",
-                      postcodeText: "",
-                      regionId: "",
-                      customerActivityStatusId: "",
-                      customerValueTypeId: "",
-                      assignedUserId: "",
-                      onlyBookmarked: false,
-                      onlyCancelled: duplicateMode ? false : true,
-                      onlyMatched: false,
-                      sortKey: duplicateMode ? "entityName" : "addedAt",
-                      sortDirection: duplicateMode ? "asc" : "desc"
-                    })
-                }
+                onClick={resetCustomerListView}
               >
                 Reset
               </button>
@@ -6340,6 +6350,9 @@ function CustomersView({
               <span className="page-action-note">Duplicate candidates: {duplicateCount}</span>
               <button className="secondary-action" type="button" onClick={() => setDuplicateRefreshKey((current) => current + 1)}>
                 Find duplicates
+              </button>
+              <button className="secondary-action" type="button" onClick={resetCustomerListView}>
+                Show all duplicates
               </button>
               <button className="secondary-action" type="button" disabled={markedDuplicateCount === 0} onClick={removeMarkedDuplicateRows}>
                 Remove marked rows
