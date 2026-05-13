@@ -1,0 +1,13 @@
+.git
+.vscode
+automation-output
+backups
+node_modules
+apps/web/node_modules
+apps/web/dist
+apps/api/bin
+apps/api/obj
+playwright-report
+test-results
+*.log
+*.tsbuildinfo

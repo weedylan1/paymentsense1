@@ -1,0 +1,28 @@
+{
+  "name": "website-automation-playwright",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test tests/smoke.spec.ts tests/jsonquiky.spec.ts",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "auth:paymentsense": "playwright test tests/paymentsense-auth.spec.ts --headed --project=chromium",
+    "test:paymentsense": "playwright test tests/paymentsense.spec.ts --project=chromium",
+    "test:paymentsense-search": "playwright test tests/paymentsense-search.spec.ts --project=chromium",
+    "api:dev": "dotnet run --project apps/api",
+    "web:dev": "npm --prefix apps/web run dev",
+    "web:build": "npm --prefix apps/web run build",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "automation:demo": "tsx scripts/demo-automation.ts",
+    "automation:jsonquiky": "tsx scripts/jsonquiky-automation.ts",
+    "automation:paymentsense-search": "tsx scripts/paymentsense-search.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.1",
+    "dotenv": "^16.4.7",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

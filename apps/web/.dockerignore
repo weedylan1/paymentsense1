@@ -1,0 +1,6 @@
+dist/
+node_modules/
+vite-err.log
+vite-out.log
+web-err.log
+web-out.log

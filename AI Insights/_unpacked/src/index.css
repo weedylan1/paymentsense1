@@ -1,0 +1,28 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,100..900;1,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-serif: "Libre Baskerville", serif;
+
+  --color-teal-50: #f0fbfb;
+  --color-teal-950: #042f2e;
+}
+
+@layer base {
+  body {
+    @apply antialiased overflow-x-hidden bg-teal-50 text-teal-950;
+  }
+
+  /* Custom scrollbar for that "Intelligence Interface" look */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-teal-50;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-teal-900/20 hover:bg-teal-900/40 transition-colors;
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "tracks": [
+    {
+      "pathUri": "https://jester.click/audio/automation-one.mp3",
+      "fileName": "automation-one.mp3",
+      "isInstrumental": false
+    },
+    {
+      "pathUri": "https://jester.click/audio/automation-two.mp3",
+      "fileName": "automation-two.mp3",
+      "isInstrumental": true
+    }
+  ]
+}

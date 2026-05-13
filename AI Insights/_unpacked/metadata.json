@@ -1,0 +1,6 @@
+{
+  "name": "UK Business Insight Explorer",
+  "description": "Powerful tool to find UK business information including Companies House details and SIC codes using AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["AI-powered business search", "Companies House data integration"]
+}

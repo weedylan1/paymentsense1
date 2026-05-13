@@ -1,0 +1,49 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: paymentsense-matchlab-api
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      DATABASE_URL: Host=host.docker.internal;Port=5432;Database=myapp;Username=postgres;Password=SuperSecret123!
+      RabbitMq__Host: host.docker.internal
+      RabbitMq__Username: admin
+      RabbitMq__Password: SuperSecret123!
+      RabbitMq__VHost: /
+      RabbitMq__ManagementBaseUrl: http://host.docker.internal:15672
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./playwright/.auth:/playwright/.auth:ro
+    ports:
+      - "5157:8080"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: paymentsense-matchlab-web
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    container_name: paymentsense-matchlab-worker
+    environment:
+      DATABASE_URL: Host=host.docker.internal;Port=5432;Database=myapp;Username=postgres;Password=SuperSecret123!
+      RabbitMq__Host: host.docker.internal
+      RabbitMq__Username: admin
+      RabbitMq__Password: SuperSecret123!
+      RabbitMq__VHost: /
+      RabbitMq__ManagementBaseUrl: http://host.docker.internal:15672
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
