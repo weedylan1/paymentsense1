@@ -5500,6 +5500,9 @@ function CustomersView({
   const [duplicateReviewMarks, setDuplicateReviewMarks] = useState<Record<number, "not_duplicate" | "archive_duplicate" | undefined>>({});
   const [showArchiveMarkedOnly, setShowArchiveMarkedOnly] = useState(false);
   const [archivingDuplicateRows, setArchivingDuplicateRows] = useState(false);
+  const customerListScrollRef = useRef<HTMLDivElement | null>(null);
+  const duplicateReasonScrollTopRef = useRef(0);
+  const restoreDuplicateReasonScrollRef = useRef(false);
 
   useEffect(() => {
     if (!state.data?.length) {
@@ -6119,6 +6122,17 @@ function CustomersView({
     }));
   }
 
+  function applyDuplicateReasonFilter(reasonKey: string) {
+    duplicateReasonScrollTopRef.current = customerListScrollRef.current?.scrollTop ?? 0;
+    restoreDuplicateReasonScrollRef.current = false;
+    setActiveDuplicateReasonKey(reasonKey);
+  }
+
+  function clearDuplicateReasonFilter() {
+    restoreDuplicateReasonScrollRef.current = true;
+    setActiveDuplicateReasonKey(null);
+  }
+
   function resetCustomerListView() {
     onViewStateChange({
       searchText: "",
@@ -6139,6 +6153,7 @@ function CustomersView({
       setHiddenDuplicateCustomerIds(new Set());
       setDuplicateReviewMarks({});
       setShowArchiveMarkedOnly(false);
+      restoreDuplicateReasonScrollRef.current = false;
       setDuplicateRefreshKey((current) => current + 1);
     }
   }
@@ -6216,6 +6231,22 @@ function CustomersView({
     });
     setArchivingDuplicateRows(false);
   }
+
+  useEffect(() => {
+    if (!duplicateMode || activeDuplicateReasonKey || !restoreDuplicateReasonScrollRef.current) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const scrollContainer = customerListScrollRef.current;
+      if (scrollContainer) {
+        scrollContainer.scrollTop = Math.min(duplicateReasonScrollTopRef.current, scrollContainer.scrollHeight);
+      }
+      restoreDuplicateReasonScrollRef.current = false;
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [activeDuplicateReasonKey, duplicateMode, filteredData?.length]);
 
   return (
     <div className={showListOptions ? "customer-page-layout" : "customer-page-layout customer-page-layout-options-hidden"}>
@@ -6381,7 +6412,7 @@ function CustomersView({
             {activeDuplicateReason ? (
               <>
                 <span>Filtering by {activeDuplicateReason.text}</span>
-                <button className="inline-link-button" type="button" onClick={() => setActiveDuplicateReasonKey(null)}>
+                <button className="inline-link-button" type="button" onClick={clearDuplicateReasonFilter}>
                   Clear reason filter
                 </button>
               </>
@@ -6394,7 +6425,7 @@ function CustomersView({
       </section>
     )}
     {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
-    <div className={showListOptions ? "customer-list-scroll" : "customer-list-scroll customer-list-scroll-expanded"}>
+    <div ref={customerListScrollRef} className={showListOptions ? "customer-list-scroll" : "customer-list-scroll customer-list-scroll-expanded"}>
       <DataTable
         className="customers-page-table"
         state={customerRows ? { ...state, data: filteredData } : state}
@@ -6496,7 +6527,7 @@ function CustomersView({
                       className={reason.key === activeDuplicateReasonKey ? "duplicate-reason-badge active" : "duplicate-reason-badge"}
                       key={reason.key}
                       type="button"
-                      onClick={() => setActiveDuplicateReasonKey(reason.key)}
+                      onClick={() => applyDuplicateReasonFilter(reason.key)}
                     >
                       {reason.text}
                     </button>
