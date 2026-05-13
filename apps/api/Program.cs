@@ -1060,7 +1060,7 @@ app.MapPost("/api/customer-map/geocode", async (
 app.MapGet("/api/customer-map/saved", async (NpgsqlDataSource db) =>
 {
     await using var command = db.CreateCommand("""
-        select id, name, cardinality(customer_ids), created_at, updated_at
+        select id, name, cardinality(customer_ids), map_source, created_at, updated_at
         from paymentsense_core.customer_geography_maps
         order by updated_at desc, id desc
         """);
@@ -1072,8 +1072,9 @@ app.MapGet("/api/customer-map/saved", async (NpgsqlDataSource db) =>
             reader.GetInt64(0),
             reader.GetString(1),
             reader.GetInt32(2),
-            reader.GetDateTime(3),
-            reader.GetDateTime(4)));
+            reader.GetString(3),
+            reader.GetDateTime(4),
+            reader.GetDateTime(5)));
     }
 
     return Results.Ok(rows);
@@ -1082,7 +1083,7 @@ app.MapGet("/api/customer-map/saved", async (NpgsqlDataSource db) =>
 app.MapGet("/api/customer-map/saved/{mapId:long}", async (NpgsqlDataSource db, long mapId) =>
 {
     await using var command = db.CreateCommand("""
-        select id, name, customer_ids, created_at, updated_at
+        select id, name, customer_ids, map_source, lead_ids, created_at, updated_at
         from paymentsense_core.customer_geography_maps
         where id = @id
         """);
@@ -1098,46 +1099,60 @@ app.MapGet("/api/customer-map/saved/{mapId:long}", async (NpgsqlDataSource db, l
         reader.GetInt64(0),
         reader.GetString(1),
         customerIds,
-        reader.GetDateTime(3),
-        reader.GetDateTime(4)));
+        reader.GetString(3),
+        reader.GetFieldValue<long[]>(4),
+        reader.GetDateTime(5),
+        reader.GetDateTime(6)));
 });
 
 app.MapPost("/api/customer-map/saved", async (NpgsqlDataSource db, CustomerMapSaveRequest request) =>
 {
     var name = string.IsNullOrWhiteSpace(request.Name) ? "Untitled map" : request.Name.Trim();
     var customerIds = request.CustomerIds?.Distinct().ToArray() ?? [];
+    var leadIds = request.LeadIds?.Distinct().ToArray() ?? [];
+    var mapSource = string.Equals(request.MapSource, "leads", StringComparison.OrdinalIgnoreCase) ? "leads" : "customers";
     await using var command = db.CreateCommand("""
-        insert into paymentsense_core.customer_geography_maps (name, customer_ids)
-        values (@name, @customer_ids)
-        returning id, name, customer_ids, created_at, updated_at
+        insert into paymentsense_core.customer_geography_maps (name, customer_ids, map_source, lead_ids)
+        values (@name, @customer_ids, @map_source, @lead_ids)
+        returning id, name, customer_ids, map_source, lead_ids, created_at, updated_at
         """);
     command.Parameters.AddWithValue("name", name);
     command.Parameters.AddWithValue("customer_ids", customerIds);
+    command.Parameters.AddWithValue("map_source", mapSource);
+    command.Parameters.AddWithValue("lead_ids", leadIds);
     await using var reader = await command.ExecuteReaderAsync();
     await reader.ReadAsync();
     return Results.Ok(new CustomerMapSavedDetailResponse(
         reader.GetInt64(0),
         reader.GetString(1),
         reader.GetFieldValue<long[]>(2),
-        reader.GetDateTime(3),
-        reader.GetDateTime(4)));
+        reader.GetString(3),
+        reader.GetFieldValue<long[]>(4),
+        reader.GetDateTime(5),
+        reader.GetDateTime(6)));
 });
 
 app.MapPut("/api/customer-map/saved/{mapId:long}", async (NpgsqlDataSource db, long mapId, CustomerMapSaveRequest request) =>
 {
     var name = string.IsNullOrWhiteSpace(request.Name) ? "Untitled map" : request.Name.Trim();
     var customerIds = request.CustomerIds?.Distinct().ToArray() ?? [];
+    var leadIds = request.LeadIds?.Distinct().ToArray() ?? [];
+    var mapSource = string.Equals(request.MapSource, "leads", StringComparison.OrdinalIgnoreCase) ? "leads" : "customers";
     await using var command = db.CreateCommand("""
         update paymentsense_core.customer_geography_maps
         set name = @name,
             customer_ids = @customer_ids,
+            map_source = @map_source,
+            lead_ids = @lead_ids,
             updated_at = now()
         where id = @id
-        returning id, name, customer_ids, created_at, updated_at
+        returning id, name, customer_ids, map_source, lead_ids, created_at, updated_at
         """);
     command.Parameters.AddWithValue("id", mapId);
     command.Parameters.AddWithValue("name", name);
     command.Parameters.AddWithValue("customer_ids", customerIds);
+    command.Parameters.AddWithValue("map_source", mapSource);
+    command.Parameters.AddWithValue("lead_ids", leadIds);
     await using var reader = await command.ExecuteReaderAsync();
     if (!await reader.ReadAsync())
     {
@@ -1148,8 +1163,10 @@ app.MapPut("/api/customer-map/saved/{mapId:long}", async (NpgsqlDataSource db, l
         reader.GetInt64(0),
         reader.GetString(1),
         reader.GetFieldValue<long[]>(2),
-        reader.GetDateTime(3),
-        reader.GetDateTime(4)));
+        reader.GetString(3),
+        reader.GetFieldValue<long[]>(4),
+        reader.GetDateTime(5),
+        reader.GetDateTime(6)));
 });
 
 app.MapDelete("/api/customer-map/saved/{mapId:long}", async (NpgsqlDataSource db, long mapId) =>
@@ -9390,9 +9407,9 @@ internal sealed record CustomerMapGeocodeRequest(IReadOnlyList<long> CustomerIds
 internal sealed record CustomerMapGeocodeResponse(IReadOnlyList<CustomerMapGeocodeResult> Results);
 internal sealed record CustomerMapGeocodeResult(long CustomerId, string Status, double? Latitude, double? Longitude, string? Accuracy, string? Error);
 internal sealed record CustomerMapGeocodeSource(long CustomerId, string QueryText, string? FallbackQueryText, string AddressKey);
-internal sealed record CustomerMapSaveRequest(string? Name, IReadOnlyList<long>? CustomerIds);
-internal sealed record CustomerMapSavedSummaryResponse(long Id, string Name, int CustomerCount, DateTime CreatedAt, DateTime UpdatedAt);
-internal sealed record CustomerMapSavedDetailResponse(long Id, string Name, IReadOnlyList<long> CustomerIds, DateTime CreatedAt, DateTime UpdatedAt);
+internal sealed record CustomerMapSaveRequest(string? Name, IReadOnlyList<long>? CustomerIds, string? MapSource = null, IReadOnlyList<long>? LeadIds = null);
+internal sealed record CustomerMapSavedSummaryResponse(long Id, string Name, int CustomerCount, string MapSource, DateTime CreatedAt, DateTime UpdatedAt);
+internal sealed record CustomerMapSavedDetailResponse(long Id, string Name, IReadOnlyList<long> CustomerIds, string MapSource, IReadOnlyList<long> LeadIds, DateTime CreatedAt, DateTime UpdatedAt);
 internal sealed record CustomerSearchRequest(string Query, bool PersistToDatabase = true, long? RegionId = null);
 internal sealed record ProspectSearchRequest(string Query, bool PersistToDatabase = true);
 internal sealed record CustomerSearchPreviewResponse(string Query, string SearchUrl, IReadOnlyList<CustomerSearchRowResponse> Rows);

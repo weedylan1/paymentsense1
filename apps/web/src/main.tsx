@@ -264,6 +264,7 @@ type CustomerMapPage = {
 
 type CustomerMapRow = {
   id: number;
+  leadId?: number;
   customerRef?: string;
   mid?: string;
   addedAt: string;
@@ -306,6 +307,7 @@ type SavedCustomerMap = {
   id: number;
   name: string;
   customerCount: number;
+  mapSource: "customers" | "leads";
   createdAt: string;
   updatedAt: string;
 };
@@ -314,6 +316,8 @@ type SavedCustomerMapDetail = {
   id: number;
   name: string;
   customerIds: number[];
+  mapSource: "customers" | "leads";
+  leadIds: number[];
   createdAt: string;
   updatedAt: string;
 };
@@ -1634,6 +1638,7 @@ function App() {
             customerActivityStatuses={customerActivityStatuses.data ?? []}
             customerValueTypes={customerValueTypes.data ?? []}
             users={users.data ?? []}
+            leads={leads.data ?? []}
             viewState={customerMapViewState}
             onViewStateChange={setCustomerMapViewState}
             savedMapIdToLoad={customerMapLoadRequest}
@@ -5626,6 +5631,7 @@ function CustomerGeographyView({
   customerActivityStatuses,
   customerValueTypes,
   users,
+  leads,
   viewState,
   onViewStateChange,
   savedMapIdToLoad,
@@ -5638,6 +5644,7 @@ function CustomerGeographyView({
   customerActivityStatuses: CustomerActivityStatusOption[];
   customerValueTypes: CustomerValueType[];
   users: User[];
+  leads: Lead[];
   viewState: CustomerPageViewState;
   onViewStateChange: Dispatch<SetStateAction<CustomerPageViewState>>;
   savedMapIdToLoad: number | null;
@@ -5664,6 +5671,32 @@ function CustomerGeographyView({
   const markerLayerRef = useRef<L.LayerGroup | null>(null);
   const pulseTimerRef = useRef<number | null>(null);
   const [pulsingCustomerId, setPulsingCustomerId] = useState<number | null>(null);
+
+  function leadToMapRow(lead: Lead): CustomerMapRow {
+    return {
+      id: lead.customerId,
+      leadId: lead.id,
+      customerRef: lead.customerRef,
+      mid: lead.mid,
+      addedAt: lead.createdAt,
+      entityName: lead.customerName,
+      tradingName: lead.tradingName,
+      tradingAddress: lead.tradingAddress,
+      postcode: lead.postcode,
+      status: lead.leadStatus,
+      regionId: lead.regionId,
+      regionName: lead.regionName,
+      customerActivityStatusId: lead.customerActivityStatusId,
+      customerActivityStatusName: lead.customerActivityStatusName,
+      customerValueTypeId: lead.customerValueTypeId,
+      customerValueTypeLabel: lead.customerValueTypeLabel,
+      assignedUserId: lead.assignedUserId,
+      assignedUserName: lead.assignedUserName,
+      isBookmarked: false,
+      hasStoredMatches: true,
+      leadPriority: lead.leadPriority
+    };
+  }
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams();
@@ -5763,16 +5796,33 @@ function CustomerGeographyView({
       .then(async (map) => {
         if (cancelled) return;
         setCurrentSavedMap(map);
-        setMapSelectionSource("customers");
+        setMapSelectionSource(map.mapSource);
         const nextRows: Record<number, CustomerMapRow> = {};
-        for (const customerId of map.customerIds) {
-          nextRows[customerId] = {
-            id: customerId,
-            addedAt: "",
-            entityName: `Customer ${customerId}`,
-            isBookmarked: false,
-            hasStoredMatches: false
-          };
+        if (map.mapSource === "leads") {
+          let availableLeads = leads;
+          if (!availableLeads.length) {
+            const leadsResponse = await fetchWithActor(`${apiBase}/api/leads`);
+            if (!leadsResponse.ok) throw new Error(`HTTP ${leadsResponse.status}`);
+            availableLeads = await leadsResponse.json() as Lead[];
+          }
+          const leadIds = new Set(map.leadIds);
+          const customerIds = new Set(map.customerIds);
+          const savedLeads = availableLeads.filter((lead) => leadIds.size ? leadIds.has(lead.id) : customerIds.has(lead.customerId));
+          for (const lead of savedLeads) {
+            nextRows[lead.customerId] = leadToMapRow(lead);
+          }
+          onViewStateChange((current) => ({ ...current, onlyCancelled: false }));
+        } else {
+          for (const customerId of map.customerIds) {
+            nextRows[customerId] = {
+              id: customerId,
+              addedAt: "",
+              entityName: `Customer ${customerId}`,
+              isBookmarked: false,
+              hasStoredMatches: false
+            };
+          }
+          onViewStateChange((current) => ({ ...current, onlyCancelled: true }));
         }
         setSelectedMapRows(nextRows);
         await geocodeRows(map.customerIds);
@@ -5788,35 +5838,14 @@ function CustomerGeographyView({
     return () => {
       cancelled = true;
     };
-  }, [savedMapIdToLoad]);
+  }, [savedMapIdToLoad, leads]);
 
   useEffect(() => {
     if (!leadRowsToLoad?.length) return;
 
     const nextRows: Record<number, CustomerMapRow> = {};
     for (const lead of leadRowsToLoad) {
-      nextRows[lead.customerId] = {
-        id: lead.customerId,
-        customerRef: lead.customerRef,
-        mid: lead.mid,
-        addedAt: lead.createdAt,
-        entityName: lead.customerName,
-        tradingName: lead.tradingName,
-        tradingAddress: lead.tradingAddress,
-        postcode: lead.postcode,
-        status: lead.leadStatus,
-        regionId: lead.regionId,
-        regionName: lead.regionName,
-        customerActivityStatusId: lead.customerActivityStatusId,
-        customerActivityStatusName: lead.customerActivityStatusName,
-        customerValueTypeId: lead.customerValueTypeId,
-        customerValueTypeLabel: lead.customerValueTypeLabel,
-        assignedUserId: lead.assignedUserId,
-        assignedUserName: lead.assignedUserName,
-        isBookmarked: false,
-        hasStoredMatches: true,
-        leadPriority: lead.leadPriority
-      };
+      nextRows[lead.customerId] = leadToMapRow(lead);
     }
 
     setCurrentSavedMap(null);
@@ -6077,6 +6106,9 @@ function CustomerGeographyView({
     event?.preventDefault();
     const rowsToSave = mapSelectionSource === "leads" ? filteredLeadRows : selectedRows;
     const customerIds = rowsToSave.map((row) => row.id);
+    const leadIds = mapSelectionSource === "leads"
+      ? rowsToSave.map((row) => row.leadId).filter((leadId): leadId is number => typeof leadId === "number")
+      : [];
     const name = saveMapName.trim();
     if (!customerIds.length || !name) return;
 
@@ -6085,7 +6117,7 @@ function CustomerGeographyView({
       const response = await fetchWithActor(currentSavedMap ? `${apiBase}/api/customer-map/saved/${currentSavedMap.id}` : `${apiBase}/api/customer-map/saved`, {
         method: currentSavedMap ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, customerIds })
+        body: JSON.stringify({ name, customerIds, mapSource: mapSelectionSource, leadIds })
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { error?: string } | null;
@@ -6113,6 +6145,31 @@ function CustomerGeographyView({
     setNotice({ kind: "success", message: `${currentSavedMap.name} deleted.` });
     setCurrentSavedMap(null);
     onSavedMapsChanged();
+  }
+
+  function clearMap() {
+    setCurrentSavedMap(null);
+    setSelectedMapRows({});
+    setPulsingCustomerId(null);
+    setMapSelectionSource("customers");
+    onViewStateChange({
+      searchText: "",
+      postcodeText: "",
+      regionId: "",
+      customerActivityStatusId: "",
+      customerValueTypeId: "",
+      assignedUserId: "",
+      onlyBookmarked: false,
+      onlyMapped: false,
+      onlyCancelled: true,
+      onlyMatched: false,
+      addedFrom: "",
+      addedTo: "",
+      sortKey: "entityName",
+      sortDirection: "asc"
+    });
+    setPage(1);
+    setNotice({ kind: "success", message: "Map cleared." });
   }
 
   function fitSelectedMarkers() {
@@ -6205,19 +6262,9 @@ function CustomerGeographyView({
                 Delete map
               </button>
             ) : null}
-            {mapSelectionSource === "leads" ? (
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={() => {
-                  setSelectedMapRows({});
-                  setMapSelectionSource("customers");
-                  onViewStateChange((current) => ({ ...current, onlyCancelled: true }));
-                }}
-              >
-                Clear lead map
-              </button>
-            ) : null}
+            <button className="secondary-action" type="button" disabled={Object.keys(selectedMapRows).length === 0 && !currentSavedMap} onClick={clearMap}>
+              Clear Map
+            </button>
           </div>
           {mapSelectionSource === "leads" ? (
             <DataTable
