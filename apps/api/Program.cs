@@ -75,6 +75,31 @@ app.MapGet("/api/dashboard", async (NpgsqlDataSource db) =>
         reader.GetInt64(6)));
 });
 
+app.MapGet("/api/dashboard/statistics", async (NpgsqlDataSource db) =>
+{
+    var snapshot = await LoadLatestDashboardStatisticsAsync(db);
+    return snapshot is null
+        ? Results.Ok(new DashboardStatisticsSnapshotResponse(null, null))
+        : Results.Ok(new DashboardStatisticsSnapshotResponse(snapshot.Value.CalculatedAt, snapshot.Value.Statistics));
+});
+
+app.MapPost("/api/dashboard/statistics/recalculate", async (NpgsqlDataSource db) =>
+{
+    var statistics = await CalculateDashboardStatisticsAsync(db);
+    var calculatedAt = DateTime.UtcNow;
+    var snapshotJson = JsonSerializer.Serialize(statistics, JsonSerializerOptions.Web);
+
+    await using var command = db.CreateCommand("""
+        insert into paymentsense_core.dashboard_statistics_snapshots (calculated_at, snapshot_json)
+        values (@calculated_at, @snapshot_json::jsonb)
+        """);
+    command.Parameters.AddWithValue("calculated_at", calculatedAt);
+    command.Parameters.AddWithValue("snapshot_json", snapshotJson);
+    await command.ExecuteNonQueryAsync();
+
+    return Results.Ok(new DashboardStatisticsSnapshotResponse(calculatedAt, statistics));
+});
+
 app.MapGet("/api/activity-events", async (NpgsqlDataSource db, int? limit) =>
 {
     var take = Math.Clamp(limit ?? 50, 1, 250);
@@ -4130,6 +4155,163 @@ static async Task<IReadOnlyList<ActivityEventResponse>> LoadActivityEventsAsync(
             reader.GetNullableString(7),
             reader.GetDateTime(8),
             reader.GetBoolean(9)));
+    }
+
+    return rows;
+}
+
+static async Task<(DateTime CalculatedAt, DashboardStatisticsResponse Statistics)?> LoadLatestDashboardStatisticsAsync(NpgsqlDataSource db)
+{
+    await using var command = db.CreateCommand("""
+        select calculated_at, snapshot_json
+        from paymentsense_core.dashboard_statistics_snapshots
+        order by calculated_at desc, id desc
+        limit 1
+        """);
+    await using var reader = await command.ExecuteReaderAsync();
+    if (!await reader.ReadAsync())
+    {
+        return null;
+    }
+
+    var statistics = JsonSerializer.Deserialize<DashboardStatisticsResponse>(reader.GetString(1), JsonSerializerOptions.Web);
+    return statistics is null ? null : (reader.GetDateTime(0), statistics);
+}
+
+static async Task<DashboardStatisticsResponse> CalculateDashboardStatisticsAsync(NpgsqlDataSource db)
+{
+    await using var scalarCommand = db.CreateCommand("""
+        with customer_match_summary as (
+          select customer_id
+          from paymentsense_core.match_candidates
+          group by customer_id
+        ),
+        owned_customer_summary as (
+          select c.id
+          from paymentsense_core.customers c
+          join paymentsense_core.organisations o on o.id = c.organisation_id
+          where exists (
+            select 1
+            from paymentsense_core.owned_checklist oc
+            where oc.expires_at > now()
+              and (
+                (
+                  oc.normalized_contact_email is not null
+                  and exists (
+                    select 1
+                    from paymentsense_core.contacts ct
+                    where ct.organisation_id = o.id
+                      and ct.normalized_email = oc.normalized_contact_email
+                  )
+                )
+                or (
+                  oc.normalized_business_name is not null
+                  and char_length(oc.normalized_business_name) >= 6
+                  and (
+                    oc.normalized_business_name = o.normalized_name
+                    or oc.normalized_business_name = c.normalized_trading_name
+                    or o.normalized_name like '%' || oc.normalized_business_name || '%'
+                    or oc.normalized_business_name like '%' || o.normalized_name || '%'
+                    or (
+                      c.normalized_trading_name is not null
+                      and (
+                        c.normalized_trading_name like '%' || oc.normalized_business_name || '%'
+                        or oc.normalized_business_name like '%' || c.normalized_trading_name || '%'
+                      )
+                    )
+                  )
+                )
+                or (
+                  oc.normalized_contact_name is not null
+                  and char_length(oc.normalized_contact_name) >= 6
+                  and exists (
+                    select 1
+                    from paymentsense_core.contacts ct
+                    where ct.organisation_id = o.id
+                      and ct.normalized_name is not null
+                      and (
+                        ct.normalized_name = oc.normalized_contact_name
+                        or ct.normalized_name like '%' || oc.normalized_contact_name || '%'
+                        or oc.normalized_contact_name like '%' || ct.normalized_name || '%'
+                      )
+                  )
+                )
+              )
+          )
+        )
+        select
+          (select count(*) from paymentsense_core.customers where status = 'cancelled'),
+          (select count(*) from customer_match_summary),
+          (select count(*) from owned_customer_summary),
+          (
+            select count(*)
+            from paymentsense_core.queued_jobs
+            where removed_at is null
+              and job_type = 'ai_company_insight'
+              and started_at is not null
+          )
+        """);
+    scalarCommand.CommandTimeout = 180;
+    await using var scalarReader = await scalarCommand.ExecuteReaderAsync();
+    await scalarReader.ReadAsync();
+    var cancelledCustomers = scalarReader.GetInt64(0);
+    var customersWithProspects = scalarReader.GetInt64(1);
+    var customersWithPotentialExternalOwner = scalarReader.GetInt64(2);
+    var aiInsightJobsRun = scalarReader.GetInt64(3);
+    await scalarReader.DisposeAsync();
+
+    return new DashboardStatisticsResponse(
+        cancelledCustomers,
+        customersWithProspects,
+        customersWithPotentialExternalOwner,
+        aiInsightJobsRun,
+        await LoadDashboardChartRowsAsync(db, """
+            select u.full_name, count(l.id)::bigint
+            from paymentsense_core.users u
+            left join paymentsense_core.leads l on l.assigned_user_id = u.id
+            group by u.id, u.full_name
+            order by u.full_name
+            """),
+        await LoadDashboardChartRowsAsync(db, """
+            with priorities(priority, sort_order) as (
+              values
+                ('very_low', 1),
+                ('low', 2),
+                ('medium', 3),
+                ('high', 4),
+                ('urgent', 5)
+            )
+            select p.priority, count(l.id)::bigint
+            from priorities p
+            left join paymentsense_core.leads l on l.lead_priority = p.priority
+            group by p.priority, p.sort_order
+            order by p.sort_order
+            """),
+        await LoadDashboardChartRowsAsync(db, """
+            select coalesce(cvt.label, 'Unassigned'), count(c.id)::bigint
+            from paymentsense_core.customers c
+            left join paymentsense_core.customer_value_types cvt on cvt.id = c.customer_value_type_id
+            group by coalesce(cvt.label, 'Unassigned'), cvt.shield_order
+            order by cvt.shield_order nulls last, coalesce(cvt.label, 'Unassigned')
+            """),
+        await LoadDashboardChartRowsAsync(db, """
+            select coalesce(r.name, 'Unassigned'), count(c.id)::bigint
+            from paymentsense_core.customers c
+            left join paymentsense_core.regions r on r.id = c.region_id
+            group by coalesce(r.name, 'Unassigned')
+            order by coalesce(r.name, 'Unassigned')
+            """));
+}
+
+static async Task<IReadOnlyList<DashboardStatisticChartRowResponse>> LoadDashboardChartRowsAsync(NpgsqlDataSource db, string sql)
+{
+    await using var command = db.CreateCommand(sql);
+    command.CommandTimeout = 180;
+    var rows = new List<DashboardStatisticChartRowResponse>();
+    await using var reader = await command.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+    {
+        rows.Add(new DashboardStatisticChartRowResponse(reader.GetString(0), reader.GetInt64(1)));
     }
 
     return rows;
@@ -9117,6 +9299,17 @@ internal sealed record DashboardResponse(
     long Customers,
     long CandidateMatches,
     long NeedsReviewMatches);
+internal sealed record DashboardStatisticsSnapshotResponse(DateTime? CalculatedAt, DashboardStatisticsResponse? Statistics);
+internal sealed record DashboardStatisticsResponse(
+    long CancelledCustomers,
+    long CustomersWithProspects,
+    long CustomersWithPotentialExternalOwner,
+    long AiInsightJobsRun,
+    IReadOnlyList<DashboardStatisticChartRowResponse> LeadsByUser,
+    IReadOnlyList<DashboardStatisticChartRowResponse> LeadsByPriority,
+    IReadOnlyList<DashboardStatisticChartRowResponse> CustomersByValueType,
+    IReadOnlyList<DashboardStatisticChartRowResponse> CustomersByRegion);
+internal sealed record DashboardStatisticChartRowResponse(string Label, long Value);
 internal sealed record ActivityEventResponse(long Id, string EventType, string EntityType, long? EntityId, string Title, string Description, long? ActorUserId, string? ActorName, DateTime CreatedAt, bool IsNotifiable);
 internal sealed record ActivityEventCreateRequest(string EventType, string EntityType, long? EntityId, long? ActorUserId, string? ActorName, string Title, string Description, bool IsNotifiable, IReadOnlyDictionary<string, object?>? Metadata = null);
 internal sealed record ActivityActorContext(long? UserId, string? Name);

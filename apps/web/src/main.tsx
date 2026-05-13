@@ -23,6 +23,27 @@ type Dashboard = {
   needsReviewMatches: number;
 };
 
+type DashboardStatisticsSnapshot = {
+  calculatedAt?: string;
+  statistics?: DashboardStatistics;
+};
+
+type DashboardStatistics = {
+  cancelledCustomers: number;
+  customersWithProspects: number;
+  customersWithPotentialExternalOwner: number;
+  aiInsightJobsRun: number;
+  leadsByUser: DashboardStatisticChartRow[];
+  leadsByPriority: DashboardStatisticChartRow[];
+  customersByValueType: DashboardStatisticChartRow[];
+  customersByRegion: DashboardStatisticChartRow[];
+};
+
+type DashboardStatisticChartRow = {
+  label: string;
+  value: number;
+};
+
 type ActivityEvent = {
   id: number;
   eventType: string;
@@ -905,6 +926,7 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [currentUserId, setCurrentUserId] = useState(() => window.localStorage.getItem(actorUserStorageKey) ?? "");
   const dashboard = useApi<Dashboard>("/api/dashboard", refreshKey);
+  const dashboardStatistics = useApi<DashboardStatisticsSnapshot>("/api/dashboard/statistics", refreshKey);
   const searchRuns = useApi<SearchRun[]>("/api/search-runs", refreshKey);
   const prospects = useApi<Prospect[]>("/api/prospects", refreshKey);
   const customers = useApi<Customer[]>("/api/customers", refreshKey, currentUserId);
@@ -1386,6 +1408,7 @@ function App() {
         {activeView === "dashboard" && (
           <DashboardView
             state={dashboard}
+            statisticsState={dashboardStatistics}
             activityState={activityEvents.state}
             leads={leads.data ?? []}
             customers={customers.data ?? []}
@@ -2874,6 +2897,7 @@ function LeadPriorityLights({
 
 function DashboardView({
   state,
+  statisticsState,
   activityState,
   leads,
   customers,
@@ -2893,6 +2917,7 @@ function DashboardView({
   onSelectedCustomerIdChange
 }: {
   state: LoadState<Dashboard>;
+  statisticsState: LoadState<DashboardStatisticsSnapshot>;
   activityState: LoadState<ActivityEvent[]>;
   leads: Lead[];
   customers: Customer[];
@@ -2946,6 +2971,14 @@ function DashboardView({
     open: false,
     matchesState: { loading: false }
   });
+  const [statisticsSnapshot, setStatisticsSnapshot] = useState<DashboardStatisticsSnapshot | null>(null);
+  const [recalculatingStatistics, setRecalculatingStatistics] = useState(false);
+
+  useEffect(() => {
+    if (statisticsState.data) {
+      setStatisticsSnapshot(statisticsState.data);
+    }
+  }, [statisticsState.data]);
 
   useEffect(() => {
     setBookmarkOverrides({});
@@ -3094,6 +3127,28 @@ function DashboardView({
     ["Candidate matches", state.data.candidateMatches],
     ["Needs review", state.data.needsReviewMatches]
   ];
+
+  async function recalculateStatistics() {
+    setRecalculatingStatistics(true);
+    setNotice(null);
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/dashboard/statistics/recalculate`, { method: "POST" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      const snapshot = await response.json() as DashboardStatisticsSnapshot;
+      setStatisticsSnapshot(snapshot);
+      setNotice({ kind: "success", message: "Statistics recalculated." });
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not recalculate statistics."
+      });
+    } finally {
+      setRecalculatingStatistics(false);
+    }
+  }
 
   async function assignLeadUser(leadId: number, assignedUserId: string) {
     setNotice(null);
@@ -3554,6 +3609,13 @@ function DashboardView({
           </div>
         ))}
       </section>
+      <DashboardStatisticsSection
+        snapshot={statisticsSnapshot}
+        loading={statisticsState.loading && !statisticsSnapshot}
+        error={statisticsState.error}
+        recalculating={recalculatingStatistics}
+        onRecalculate={() => void recalculateStatistics()}
+      />
       {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
       {selectedUser && (
         <section className="detail-panel dashboard-assigned-customers-panel">
@@ -13452,6 +13514,112 @@ function ToastStack({
   );
 }
 
+function DashboardStatisticsSection({
+  snapshot,
+  loading,
+  error,
+  recalculating,
+  onRecalculate
+}: {
+  snapshot: DashboardStatisticsSnapshot | null;
+  loading: boolean;
+  error?: string;
+  recalculating: boolean;
+  onRecalculate: () => void;
+}) {
+  const stats = snapshot?.statistics;
+  const countTiles = stats
+    ? [
+        ["Cancelled customers", stats.cancelledCustomers],
+        ["Customers with prospects", stats.customersWithProspects],
+        ["Potential external owner", stats.customersWithPotentialExternalOwner],
+        ["AI Insight jobs run", stats.aiInsightJobsRun]
+      ] as const
+    : [];
+
+  return (
+    <section className="detail-panel dashboard-statistics-panel">
+      <div className="detail-header">
+        <div>
+          <span className="eyebrow">Statistics</span>
+          <h3>Statistics</h3>
+          <p>
+            {snapshot?.calculatedAt
+              ? `Last updated ${formatDateTime(snapshot.calculatedAt)}`
+              : "No statistics snapshot has been calculated yet."}
+          </p>
+        </div>
+        <div className="panel-actions">
+          <button className="page-action-button" type="button" disabled={recalculating} onClick={onRecalculate}>
+            {recalculating ? "Recalculating..." : "Recalculate"}
+          </button>
+        </div>
+      </div>
+      <div className="dashboard-statistics-body">
+        {loading ? (
+          <PanelSkeleton compact />
+        ) : error && !stats ? (
+          <ErrorPanel error={error} compact />
+        ) : !stats ? (
+          <EmptyPanel message="Press Recalculate to create the first dashboard statistics snapshot." compact />
+        ) : (
+          <>
+            <section className="metric-grid dashboard-stat-card-grid">
+              {countTiles.map(([label, value]) => (
+                <div className="metric-tile dashboard-stat-count-tile" key={label}>
+                  <span>{label}</span>
+                  <strong>{formatWholeNumber(value)}</strong>
+                </div>
+              ))}
+            </section>
+            <section className="dashboard-stat-chart-grid">
+              <DashboardStatisticBarChart title="Leads assigned to users" rows={stats.leadsByUser} />
+              <DashboardStatisticBarChart
+                title="Leads by priority"
+                rows={stats.leadsByPriority.map((row) => ({ ...row, label: getLeadPriorityLabel(row.label) }))}
+              />
+              <DashboardStatisticBarChart title="Customers by value type" rows={stats.customersByValueType} />
+              <DashboardStatisticBarChart title="Customers by region" rows={stats.customersByRegion} />
+            </section>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function DashboardStatisticBarChart({
+  title,
+  rows
+}: {
+  title: string;
+  rows: DashboardStatisticChartRow[];
+}) {
+  const maxValue = Math.max(1, ...rows.map((row) => row.value));
+
+  return (
+    <section className="dashboard-stat-chart">
+      <h4>{title}</h4>
+      <div className="dashboard-stat-bars">
+        {rows.length ? rows.map((row) => {
+          const width = row.value > 0 ? Math.max(4, Math.round((row.value / maxValue) * 100)) : 0;
+          return (
+            <div className="dashboard-stat-bar-row" key={row.label}>
+              <span className="dashboard-stat-bar-label" title={row.label}>{row.label}</span>
+              <div className="dashboard-stat-bar-track" aria-hidden="true">
+                <span className="dashboard-stat-bar-fill" style={{ width: `${width}%` }} />
+              </div>
+              <strong>{formatWholeNumber(row.value)}</strong>
+            </div>
+          );
+        }) : (
+          <p className="muted">No rows.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function PanelSkeleton({ compact = false }: { compact?: boolean }) {
   return (
     <section className={compact ? "empty-panel compact-panel" : "empty-panel"}>
@@ -13640,6 +13808,10 @@ function formatDateTime(value?: string) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(parsed);
+}
+
+function formatWholeNumber(value: number) {
+  return new Intl.NumberFormat("en-GB", { maximumFractionDigits: 0 }).format(value);
 }
 
 function formatDate(value?: string) {
