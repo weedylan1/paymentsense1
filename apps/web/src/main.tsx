@@ -50,6 +50,12 @@ type Lead = {
   tradingName?: string;
   tradingAddress?: string;
   postcode?: string;
+  regionId?: number;
+  regionName?: string;
+  customerActivityStatusId?: number;
+  customerActivityStatusName?: string;
+  customerValueTypeId?: number;
+  customerValueTypeLabel?: string;
   contactPhone?: string;
   contactEmail?: string;
   prospects?: LeadProspect[];
@@ -5716,6 +5722,12 @@ function CustomerGeographyView({
         tradingAddress: lead.tradingAddress,
         postcode: lead.postcode,
         status: lead.leadStatus,
+        regionId: lead.regionId,
+        regionName: lead.regionName,
+        customerActivityStatusId: lead.customerActivityStatusId,
+        customerActivityStatusName: lead.customerActivityStatusName,
+        customerValueTypeId: lead.customerValueTypeId,
+        customerValueTypeLabel: lead.customerValueTypeLabel,
         assignedUserId: lead.assignedUserId,
         assignedUserName: lead.assignedUserName,
         isBookmarked: false,
@@ -5738,7 +5750,44 @@ function CustomerGeographyView({
   const rows = state.data?.items.map((row) => ({ ...row, ...(coordinateOverrides[row.id] ?? {}) })) ?? [];
   const selectedIds = useMemo(() => new Set(Object.keys(selectedMapRows).map(Number)), [selectedMapRows]);
   const selectedRows = Object.values(selectedMapRows).map((row) => ({ ...row, ...(coordinateOverrides[row.id] ?? {}) }));
-  const mappedSelectedRows = selectedRows.filter((row) => typeof row.latitude === "number" && typeof row.longitude === "number");
+  const filteredLeadRows = selectedRows.filter((row) => {
+    const query = viewState.searchText.trim().toLowerCase();
+    if (query) {
+      const searchable = [
+        row.entityName,
+        row.tradingName,
+        row.customerRef,
+        row.mid,
+        row.tradingAddress,
+        row.postcode,
+        row.assignedUserName,
+        row.status,
+        row.regionName,
+        row.customerActivityStatusName,
+        row.customerValueTypeLabel
+      ];
+      if (!searchable.filter(Boolean).some((value) => value!.toLowerCase().includes(query))) return false;
+    }
+
+    const postcodeQuery = viewState.postcodeText?.trim().toLowerCase();
+    if (postcodeQuery && !(row.postcode ?? "").toLowerCase().includes(postcodeQuery)) return false;
+    if (viewState.regionId && String(row.regionId ?? "") !== viewState.regionId) return false;
+    if (viewState.customerActivityStatusId && String(row.customerActivityStatusId ?? "") !== viewState.customerActivityStatusId) return false;
+    if (viewState.customerValueTypeId) {
+      if (viewState.customerValueTypeId === "__unassigned__" && row.customerValueTypeId) return false;
+      if (viewState.customerValueTypeId !== "__unassigned__" && String(row.customerValueTypeId ?? "") !== viewState.customerValueTypeId) return false;
+    }
+    if (viewState.assignedUserId) {
+      if (viewState.assignedUserId === "__unassigned__" && row.assignedUserId) return false;
+      if (viewState.assignedUserId !== "__unassigned__" && String(row.assignedUserId ?? "") !== viewState.assignedUserId) return false;
+    }
+    if (viewState.addedFrom && viewState.addedFrom !== "all" && row.leadPriority !== viewState.addedFrom) return false;
+    if (viewState.onlyMatched && !row.hasStoredMatches) return false;
+    if (viewState.onlyCancelled && row.status?.toLowerCase() !== "cancelled") return false;
+    return true;
+  });
+  const displayedMapRows = mapSelectionSource === "leads" ? filteredLeadRows : selectedRows;
+  const mappedSelectedRows = displayedMapRows.filter((row) => typeof row.latitude === "number" && typeof row.longitude === "number");
   const totalPages = Math.max(Math.ceil((state.data?.total ?? 0) / pageSize), 1);
 
   useEffect(() => {
@@ -5873,13 +5922,14 @@ function CustomerGeographyView({
   }
 
   async function saveCurrentMap() {
-    const customerIds = Object.keys(selectedMapRows).map(Number);
+    const rowsToSave = mapSelectionSource === "leads" ? filteredLeadRows : selectedRows;
+    const customerIds = rowsToSave.map((row) => row.id);
     if (!customerIds.length) {
-      setNotice({ kind: "error", message: "Select at least one customer before saving the map." });
+      setNotice({ kind: "error", message: "Select at least one row before saving the map." });
       return;
     }
 
-    const name = currentSavedMap?.name ?? window.prompt("Map name", "Customer geography map");
+    const name = currentSavedMap?.name ?? window.prompt("Map name", mapSelectionSource === "leads" ? "Lead geography map" : "Customer geography map");
     if (!name?.trim()) return;
 
     const response = await fetchWithActor(currentSavedMap ? `${apiBase}/api/customer-map/saved/${currentSavedMap.id}` : `${apiBase}/api/customer-map/saved`, {
@@ -5920,65 +5970,65 @@ function CustomerGeographyView({
 
   return (
     <div className="geography-page">
-      {mapSelectionSource === "customers" ? (
-        <section className="customer-list-options">
-          <div className="customer-filter-row customer-filter-row-primary">
-            <div className="table-search customer-search-wide">
-              <label htmlFor="geography-search">Search customers</label>
-              <input id="geography-search" type="search" value={viewState.searchText} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, searchText: event.target.value })); }} placeholder="Entity, trading name, ref or MID" />
-            </div>
-            <div className="table-search customer-search-postcode">
-              <label htmlFor="geography-postcode">Filter by postcode</label>
-              <input id="geography-postcode" type="search" value={viewState.postcodeText ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, postcodeText: event.target.value })); }} placeholder="Postcode" />
-            </div>
-            <div className="customer-inline-filters">
+      <section className="customer-list-options">
+        <div className="customer-filter-row customer-filter-row-primary">
+          <div className="table-search customer-search-wide">
+            <label htmlFor="geography-search">Search {mapSelectionSource === "leads" ? "selected leads" : "customers"}</label>
+            <input id="geography-search" type="search" value={viewState.searchText} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, searchText: event.target.value })); }} placeholder="Entity, trading name, ref or MID" />
+          </div>
+          <div className="table-search customer-search-postcode">
+            <label htmlFor="geography-postcode">Filter by postcode</label>
+            <input id="geography-postcode" type="search" value={viewState.postcodeText ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, postcodeText: event.target.value })); }} placeholder="Postcode" />
+          </div>
+          <div className="customer-inline-filters">
+            {mapSelectionSource === "customers" ? (
               <label className="header-filter"><input type="checkbox" checked={viewState.onlyBookmarked ?? false} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyBookmarked: event.target.checked })); }} /><span>Bookmarked only</span></label>
-              <label className="header-filter"><input type="checkbox" checked={viewState.onlyMatched} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyMatched: event.target.checked })); }} /><span>Only with matches</span></label>
-              <label className="header-filter"><input type="checkbox" checked={viewState.onlyCancelled} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyCancelled: event.target.checked })); }} /><span>Cancelled only</span></label>
-              <button className="secondary-action" type="button" onClick={resetFilters}>Reset</button>
-            </div>
+            ) : null}
+            <label className="header-filter"><input type="checkbox" checked={viewState.onlyMatched} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyMatched: event.target.checked })); }} /><span>Only with matches</span></label>
+            <label className="header-filter"><input type="checkbox" checked={viewState.onlyCancelled} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, onlyCancelled: event.target.checked })); }} /><span>Cancelled only</span></label>
+            <button className="secondary-action" type="button" onClick={resetFilters}>Reset</button>
           </div>
-          <div className="customer-filter-row customer-filter-row-secondary">
-            <div className="table-search table-search-compact">
-              <label htmlFor="geography-region">Filter by region</label>
-              <select id="geography-region" value={viewState.regionId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, regionId: event.target.value })); }}>
-                <option value="">All regions</option>
-                {regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}
-              </select>
-            </div>
-            <div className="table-search table-search-compact">
-              <label htmlFor="geography-activity">Filter by activity</label>
-              <select id="geography-activity" value={viewState.customerActivityStatusId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, customerActivityStatusId: event.target.value })); }}>
-                <option value="">All activity statuses</option>
-                {customerActivityStatuses.map((status) => <option key={status.id} value={status.id}>{status.name}</option>)}
-              </select>
-            </div>
-            <div className="table-search table-search-compact">
-              <label htmlFor="geography-user">Filter by user</label>
-              <select id="geography-user" value={viewState.assignedUserId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, assignedUserId: event.target.value })); }}>
-                <option value="">All users</option>
-                <option value="__unassigned__">Unassigned</option>
-                {users.map((user) => <option key={user.id} value={user.id}>{user.fullName}</option>)}
-              </select>
-            </div>
-            <label className="table-filter-select" htmlFor="geography-value">
-              <span>Customer value</span>
-              <select id="geography-value" value={viewState.customerValueTypeId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, customerValueTypeId: event.target.value })); }}>
-                <option value="">All customer values</option>
-                <option value="__unassigned__">Unassigned</option>
-                {customerValueTypes.map((valueType) => <option key={valueType.id} value={valueType.id}>{`Shield ${valueType.shieldOrder}${valueType.label ? ` - ${valueType.label}` : ""}`}</option>)}
-              </select>
-            </label>
-            <label className="table-filter-select" htmlFor="geography-priority">
-              <span>Priority</span>
-              <select id="geography-priority" value={viewState.addedFrom || "all"} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, addedFrom: event.target.value })); }}>
-                <option value="all">All priorities</option>
-                {leadPriorityOrder.map((priority) => <option key={priority} value={priority}>{getLeadPriorityLabel(priority)}</option>)}
-              </select>
-            </label>
+        </div>
+        <div className="customer-filter-row customer-filter-row-secondary">
+          <div className="table-search table-search-compact">
+            <label htmlFor="geography-region">Filter by region</label>
+            <select id="geography-region" value={viewState.regionId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, regionId: event.target.value })); }}>
+              <option value="">All regions</option>
+              {regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}
+            </select>
           </div>
-        </section>
-      ) : null}
+          <div className="table-search table-search-compact">
+            <label htmlFor="geography-activity">Filter by activity</label>
+            <select id="geography-activity" value={viewState.customerActivityStatusId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, customerActivityStatusId: event.target.value })); }}>
+              <option value="">All activity statuses</option>
+              {customerActivityStatuses.map((status) => <option key={status.id} value={status.id}>{status.name}</option>)}
+            </select>
+          </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="geography-user">Filter by user</label>
+            <select id="geography-user" value={viewState.assignedUserId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, assignedUserId: event.target.value })); }}>
+              <option value="">All users</option>
+              <option value="__unassigned__">Unassigned</option>
+              {users.map((user) => <option key={user.id} value={user.id}>{user.fullName}</option>)}
+            </select>
+          </div>
+          <label className="table-filter-select" htmlFor="geography-value">
+            <span>Customer value</span>
+            <select id="geography-value" value={viewState.customerValueTypeId ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, customerValueTypeId: event.target.value })); }}>
+              <option value="">All customer values</option>
+              <option value="__unassigned__">Unassigned</option>
+              {customerValueTypes.map((valueType) => <option key={valueType.id} value={valueType.id}>{`Shield ${valueType.shieldOrder}${valueType.label ? ` - ${valueType.label}` : ""}`}</option>)}
+            </select>
+          </label>
+          <label className="table-filter-select" htmlFor="geography-priority">
+            <span>Priority</span>
+            <select id="geography-priority" value={viewState.addedFrom || "all"} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, addedFrom: event.target.value })); }}>
+              <option value="all">All priorities</option>
+              {leadPriorityOrder.map((priority) => <option key={priority} value={priority}>{getLeadPriorityLabel(priority)}</option>)}
+            </select>
+          </label>
+        </div>
+      </section>
 
       {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
 
@@ -5986,20 +6036,18 @@ function CustomerGeographyView({
         <section className="geography-list">
           <div className="geography-list-toolbar">
             <span>{mapSelectionSource === "leads" ? `${selectedRows.length} selected leads` : `${state.data?.total ?? 0} filtered customers`}</span>
+            {mapSelectionSource === "leads" ? <span>{filteredLeadRows.length} after filters</span> : null}
             <span>{mappedSelectedRows.length} mapped {mapSelectionSource === "leads" ? "leads" : "selections"}</span>
             <button className="secondary-action" type="button" disabled={mappedSelectedRows.length === 0} onClick={fitSelectedMarkers}>Fit selected</button>
-            {mapSelectionSource === "customers" ? (
-              <>
-                <button className="secondary-action" type="button" disabled={Object.keys(selectedMapRows).length === 0} onClick={() => void saveCurrentMap()}>
-                  {currentSavedMap ? "Update map" : "Save map"}
-                </button>
-                {currentSavedMap ? (
-                  <button className="secondary-action destructive-action" type="button" onClick={() => void deleteCurrentMap()}>
-                    Delete map
-                  </button>
-                ) : null}
-              </>
-            ) : (
+            <button className="secondary-action" type="button" disabled={(mapSelectionSource === "leads" ? filteredLeadRows.length : Object.keys(selectedMapRows).length) === 0} onClick={() => void saveCurrentMap()}>
+              {currentSavedMap ? "Update map" : "Save map"}
+            </button>
+            {currentSavedMap ? (
+              <button className="secondary-action destructive-action" type="button" onClick={() => void deleteCurrentMap()}>
+                Delete map
+              </button>
+            ) : null}
+            {mapSelectionSource === "leads" ? (
               <button
                 className="secondary-action"
                 type="button"
@@ -6010,13 +6058,13 @@ function CustomerGeographyView({
               >
                 Clear lead map
               </button>
-            )}
+            ) : null}
           </div>
           {mapSelectionSource === "leads" ? (
             <DataTable
               className="geography-table"
-              state={{ data: selectedRows, loading: false }}
-              emptyMessage="No selected leads are loaded on the map."
+              state={{ data: filteredLeadRows, loading: false }}
+              emptyMessage="No selected leads match the current geography filters."
               columns={["Map", "Lead", "User", "Address", "Postcode", "Priority", "Map status"]}
               renderRow={(row) => {
                 const mapping = mappingIds.has(row.id);

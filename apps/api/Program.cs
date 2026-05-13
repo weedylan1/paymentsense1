@@ -6927,6 +6927,12 @@ static async Task<IReadOnlyList<LeadResponse>> LoadLeadsAsync(NpgsqlDataSource d
           c.trading_name,
           ca.line1,
           ca.normalized_postcode,
+          c.region_id,
+          r.name as region_name,
+          c.customer_activity_status_id,
+          cas.name as customer_activity_status_name,
+          c.customer_value_type_id,
+          cvt.label as customer_value_type_label,
           cp.phone,
           cp.email,
           (
@@ -6943,6 +6949,9 @@ static async Task<IReadOnlyList<LeadResponse>> LoadLeadsAsync(NpgsqlDataSource d
         left join paymentsense_core.users u on u.id = l.assigned_user_id
         join paymentsense_core.customers c on c.id = l.customer_id
         join paymentsense_core.organisations co on co.id = c.organisation_id
+        left join paymentsense_core.regions r on r.id = c.region_id
+        left join paymentsense_core.customer_activity_statuses cas on cas.id = c.customer_activity_status_id
+        left join paymentsense_core.customer_value_types cvt on cvt.id = c.customer_value_type_id
         left join lateral (
           select line1, normalized_postcode
           from paymentsense_core.addresses
@@ -7004,10 +7013,16 @@ static async Task<IReadOnlyList<LeadResponse>> LoadLeadsAsync(NpgsqlDataSource d
             reader.GetNullableString(10),
             reader.GetNullableString(11),
             reader.GetNullableString(12),
-            reader.GetNullableString(13),
+            reader.IsDBNull(13) ? null : reader.GetInt64(13),
             reader.GetNullableString(14),
-            reader.GetInt64(15),
-            reader.GetInt64(16),
+            reader.IsDBNull(15) ? null : reader.GetInt64(15),
+            reader.GetNullableString(16),
+            reader.IsDBNull(17) ? null : reader.GetInt64(17),
+            reader.GetNullableString(18),
+            reader.GetNullableString(19),
+            reader.GetNullableString(20),
+            reader.GetInt64(21),
+            reader.GetInt64(22),
             Array.Empty<LeadProspectResponse>()));
     }
 
@@ -7051,6 +7066,12 @@ static async Task<IReadOnlyList<LeadResponse>> LoadCampaignWaveLeadsAsync(Npgsql
           c.trading_name,
           ca.line1,
           ca.normalized_postcode,
+          c.region_id,
+          r.name as region_name,
+          c.customer_activity_status_id,
+          cas.name as customer_activity_status_name,
+          c.customer_value_type_id,
+          cvt.label as customer_value_type_label,
           cp.phone,
           cp.email,
           (
@@ -7068,6 +7089,9 @@ static async Task<IReadOnlyList<LeadResponse>> LoadCampaignWaveLeadsAsync(Npgsql
         left join paymentsense_core.users u on u.id = l.assigned_user_id
         join paymentsense_core.customers c on c.id = l.customer_id
         join paymentsense_core.organisations co on co.id = c.organisation_id
+        left join paymentsense_core.regions r on r.id = c.region_id
+        left join paymentsense_core.customer_activity_statuses cas on cas.id = c.customer_activity_status_id
+        left join paymentsense_core.customer_value_types cvt on cvt.id = c.customer_value_type_id
         left join lateral (
           select line1, normalized_postcode
           from paymentsense_core.addresses
@@ -7116,10 +7140,16 @@ static async Task<IReadOnlyList<LeadResponse>> LoadCampaignWaveLeadsAsync(Npgsql
             reader.GetNullableString(10),
             reader.GetNullableString(11),
             reader.GetNullableString(12),
-            reader.GetNullableString(13),
+            reader.IsDBNull(13) ? null : reader.GetInt64(13),
             reader.GetNullableString(14),
-            reader.GetInt64(15),
-            reader.GetInt64(16),
+            reader.IsDBNull(15) ? null : reader.GetInt64(15),
+            reader.GetNullableString(16),
+            reader.IsDBNull(17) ? null : reader.GetInt64(17),
+            reader.GetNullableString(18),
+            reader.GetNullableString(19),
+            reader.GetNullableString(20),
+            reader.GetInt64(21),
+            reader.GetInt64(22),
             Array.Empty<LeadProspectResponse>()));
     }
 
@@ -7958,12 +7988,21 @@ static async Task<LeadDetailResponse?> LoadLeadDetailAsync(NpgsqlDataSource db, 
           c.trading_name,
           ca.line1,
           ca.normalized_postcode,
+          c.region_id,
+          r.name as region_name,
+          c.customer_activity_status_id,
+          cas.name as customer_activity_status_name,
+          c.customer_value_type_id,
+          cvt.label as customer_value_type_label,
           cp.phone,
           cp.email
         from paymentsense_core.leads l
         left join paymentsense_core.users u on u.id = l.assigned_user_id
         join paymentsense_core.customers c on c.id = l.customer_id
         join paymentsense_core.organisations co on co.id = c.organisation_id
+        left join paymentsense_core.regions r on r.id = c.region_id
+        left join paymentsense_core.customer_activity_statuses cas on cas.id = c.customer_activity_status_id
+        left join paymentsense_core.customer_value_types cvt on cvt.id = c.customer_value_type_id
         left join lateral (
           select line1, normalized_postcode
           from paymentsense_core.addresses
@@ -8012,8 +8051,14 @@ static async Task<LeadDetailResponse?> LoadLeadDetailAsync(NpgsqlDataSource db, 
         reader.GetNullableString(10),
         reader.GetNullableString(11),
         reader.GetNullableString(12),
-        reader.GetNullableString(13),
+        reader.IsDBNull(13) ? null : reader.GetInt64(13),
         reader.GetNullableString(14),
+        reader.IsDBNull(15) ? null : reader.GetInt64(15),
+        reader.GetNullableString(16),
+        reader.IsDBNull(17) ? null : reader.GetInt64(17),
+        reader.GetNullableString(18),
+        reader.GetNullableString(19),
+        reader.GetNullableString(20),
         0,
         0,
         Array.Empty<LeadProspectResponse>());
@@ -9169,7 +9214,7 @@ internal sealed record CustomerCommercialsUpdateRequest(decimal? CreditCardValue
 internal sealed record GeneratedCustomerMatch(long ProspectDbId, string ProspectId, string BusinessName, string? ContactName, string? ContactEmail, string? AddressLine1, string? Postcode, decimal Score, string Status, IReadOnlyList<string> Reasons);
 internal sealed record MatchEvaluation(bool Include, decimal Score, string Status, IReadOnlyList<string> Reasons);
 internal sealed record LeadSummaryResponse(long Id, long CustomerId, string LeadStatus, DateTime CreatedAt);
-internal sealed record LeadResponse(long Id, long CustomerId, string LeadStatus, string LeadPriority, long? AssignedUserId, string? AssignedUserName, DateTime CreatedAt, string? CustomerRef, string? Mid, string CustomerName, string? TradingName, string? TradingAddress, string? Postcode, string? ContactPhone, string? ContactEmail, long ProspectCount, long ContactHistoryCount, IReadOnlyList<LeadProspectResponse> Prospects);
+internal sealed record LeadResponse(long Id, long CustomerId, string LeadStatus, string LeadPriority, long? AssignedUserId, string? AssignedUserName, DateTime CreatedAt, string? CustomerRef, string? Mid, string CustomerName, string? TradingName, string? TradingAddress, string? Postcode, long? RegionId, string? RegionName, long? CustomerActivityStatusId, string? CustomerActivityStatusName, long? CustomerValueTypeId, string? CustomerValueTypeLabel, string? ContactPhone, string? ContactEmail, long ProspectCount, long ContactHistoryCount, IReadOnlyList<LeadProspectResponse> Prospects);
 internal sealed class LeadDetailResponse
 {
     public long Id { get; init; }
