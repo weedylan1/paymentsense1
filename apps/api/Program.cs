@@ -810,6 +810,204 @@ app.MapGet("/api/customers", async (NpgsqlDataSource db, HttpRequest httpRequest
     return Results.Ok(rows);
 });
 
+app.MapGet("/api/customer-map/customers", async (
+    NpgsqlDataSource db,
+    HttpRequest httpRequest,
+    string? searchText,
+    string? postcodeText,
+    long? regionId,
+    long? customerActivityStatusId,
+    long? customerValueTypeId,
+    long? assignedUserId,
+    bool? unassignedUser,
+    bool? unassignedCustomerValue,
+    bool? onlyBookmarked,
+    bool? onlyCancelled,
+    bool? onlyMatched,
+    int? page,
+    int? pageSize) =>
+{
+    var actor = await ResolveActivityActorAsync(db, httpRequest);
+    var currentPage = Math.Max(page ?? 1, 1);
+    var take = Math.Clamp(pageSize ?? 25, 5, 100);
+    var offset = (currentPage - 1) * take;
+
+    var conditions = new List<string>();
+    if (!string.IsNullOrWhiteSpace(searchText))
+    {
+        conditions.Add("(o.display_name ilike @search_text or c.trading_name ilike @search_text or c.customer_ref ilike @search_text or c.mid ilike @search_text)");
+    }
+    if (!string.IsNullOrWhiteSpace(postcodeText))
+    {
+        conditions.Add("a.normalized_postcode ilike @postcode_text");
+    }
+    if (regionId.HasValue)
+    {
+        conditions.Add("c.region_id = @region_id");
+    }
+    if (customerActivityStatusId.HasValue)
+    {
+        conditions.Add("c.customer_activity_status_id = @customer_activity_status_id");
+    }
+    if (customerValueTypeId.HasValue)
+    {
+        conditions.Add("c.customer_value_type_id = @customer_value_type_id");
+    }
+    if (assignedUserId.HasValue)
+    {
+        conditions.Add("c.assigned_user_id = @assigned_user_id");
+    }
+    if (unassignedUser == true)
+    {
+        conditions.Add("c.assigned_user_id is null");
+    }
+    if (unassignedCustomerValue == true)
+    {
+        conditions.Add("c.customer_value_type_id is null");
+    }
+    if (onlyBookmarked == true)
+    {
+        conditions.Add("ab.customer_id is not null");
+    }
+    if (onlyCancelled == true)
+    {
+        conditions.Add("c.status = 'cancelled'");
+    }
+    if (onlyMatched == true)
+    {
+        conditions.Add("ms.customer_id is not null");
+    }
+
+    var whereClause = conditions.Count == 0 ? "" : $"where {string.Join(" and ", conditions)}";
+    var sql = $"""
+        with first_addresses as (
+          select distinct on (organisation_id)
+            organisation_id,
+            line1,
+            normalized_postcode
+          from paymentsense_core.addresses
+          order by organisation_id, id
+        ),
+        actor_bookmarks as (
+          select distinct customer_id
+          from paymentsense_core.customer_bookmarks
+          where user_id = @actor_user_id
+        ),
+        match_summary as (
+          select customer_id
+          from paymentsense_core.match_candidates
+          group by customer_id
+        ),
+        filtered as (
+          select
+            c.id,
+            c.customer_ref,
+            c.mid,
+            c.created_at,
+            o.display_name,
+            c.trading_name,
+            a.line1,
+            a.normalized_postcode,
+            c.status,
+            c.region_id,
+            r.name as region_name,
+            c.customer_activity_status_id,
+            cas.name as activity_status_name,
+            c.customer_value_type_id,
+            cvt.label as customer_value_label,
+            c.assigned_user_id,
+            u.full_name as assigned_user_name,
+            (ab.customer_id is not null) as is_bookmarked,
+            (ms.customer_id is not null) as has_stored_matches,
+            gc.latitude,
+            gc.longitude,
+            gc.accuracy,
+            gc.status as geocode_status,
+            count(*) over() as total_count
+          from paymentsense_core.customers c
+          join paymentsense_core.organisations o on o.id = c.organisation_id
+          left join first_addresses a on a.organisation_id = o.id
+          left join paymentsense_core.regions r on r.id = c.region_id
+          left join paymentsense_core.customer_activity_statuses cas on cas.id = c.customer_activity_status_id
+          left join paymentsense_core.customer_value_types cvt on cvt.id = c.customer_value_type_id
+          left join paymentsense_core.users u on u.id = c.assigned_user_id
+          left join actor_bookmarks ab on ab.customer_id = c.id
+          left join match_summary ms on ms.customer_id = c.id
+          left join paymentsense_core.customer_geocode_cache gc on gc.customer_id = c.id
+          {whereClause}
+        )
+        select *
+        from filtered
+        order by display_name asc, id asc
+        limit @take offset @offset
+        """;
+
+    await using var command = db.CreateCommand(sql);
+    command.Parameters.AddWithValue("actor_user_id", (object?)actor.UserId ?? DBNull.Value);
+    command.Parameters.AddWithValue("take", take);
+    command.Parameters.AddWithValue("offset", offset);
+    if (!string.IsNullOrWhiteSpace(searchText)) command.Parameters.AddWithValue("search_text", $"%{searchText.Trim()}%");
+    if (!string.IsNullOrWhiteSpace(postcodeText)) command.Parameters.AddWithValue("postcode_text", $"%{postcodeText.Trim()}%");
+    if (regionId.HasValue) command.Parameters.AddWithValue("region_id", regionId.Value);
+    if (customerActivityStatusId.HasValue) command.Parameters.AddWithValue("customer_activity_status_id", customerActivityStatusId.Value);
+    if (customerValueTypeId.HasValue) command.Parameters.AddWithValue("customer_value_type_id", customerValueTypeId.Value);
+    if (assignedUserId.HasValue) command.Parameters.AddWithValue("assigned_user_id", assignedUserId.Value);
+
+    var rows = new List<CustomerMapRowResponse>();
+    var total = 0L;
+    await using var reader = await command.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+    {
+        total = reader.GetInt64(23);
+        rows.Add(new CustomerMapRowResponse(
+            reader.GetInt64(0),
+            reader.GetNullableString(1),
+            reader.GetNullableString(2),
+            reader.GetDateTime(3),
+            reader.GetString(4),
+            reader.GetNullableString(5),
+            reader.GetNullableString(6),
+            reader.GetNullableString(7),
+            TextNormalizer.NormalizeStatus(reader.GetNullableString(8)),
+            reader.IsDBNull(9) ? null : reader.GetInt64(9),
+            reader.GetNullableString(10),
+            reader.IsDBNull(11) ? null : reader.GetInt64(11),
+            reader.GetNullableString(12),
+            reader.IsDBNull(13) ? null : reader.GetInt64(13),
+            reader.GetNullableString(14),
+            reader.IsDBNull(15) ? null : reader.GetInt64(15),
+            reader.GetNullableString(16),
+            reader.GetBoolean(17),
+            reader.GetBoolean(18),
+            reader.IsDBNull(19) ? null : reader.GetDouble(19),
+            reader.IsDBNull(20) ? null : reader.GetDouble(20),
+            reader.GetNullableString(21),
+            reader.GetNullableString(22)));
+    }
+
+    return Results.Ok(new CustomerMapPageResponse(rows, total, currentPage, take));
+});
+
+app.MapPost("/api/customer-map/geocode", async (
+    NpgsqlDataSource db,
+    IHttpClientFactory httpClientFactory,
+    CustomerMapGeocodeRequest request) =>
+{
+    if (request.CustomerIds is null || request.CustomerIds.Count == 0)
+    {
+        return Results.BadRequest(new { error = "Select at least one customer to map." });
+    }
+
+    var ids = request.CustomerIds.Distinct().Take(25).ToArray();
+    var results = new List<CustomerMapGeocodeResult>();
+    foreach (var customerId in ids)
+    {
+        results.Add(await CustomerMapGeocoder.GeocodeCustomerForMapAsync(db, httpClientFactory, customerId));
+    }
+
+    return Results.Ok(new CustomerMapGeocodeResponse(results));
+});
+
 app.MapPost("/api/customers/{customerId:long}/bookmark", async (NpgsqlDataSource db, HttpRequest httpRequest, long customerId) =>
 {
     var actor = await ResolveActivityActorAsync(db, httpRequest);
@@ -8330,6 +8528,227 @@ internal static class DataReaderExtensions
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
 }
 
+internal static class CustomerMapGeocoder
+{
+public static async Task<CustomerMapGeocodeResult> GeocodeCustomerForMapAsync(NpgsqlDataSource db, IHttpClientFactory httpClientFactory, long customerId)
+{
+    var source = await LoadCustomerMapGeocodeSourceAsync(db, customerId);
+    if (source is null)
+    {
+        return new CustomerMapGeocodeResult(customerId, "not_found", null, null, null, "Customer not found.");
+    }
+
+    if (string.IsNullOrWhiteSpace(source.QueryText))
+    {
+        await SaveCustomerMapGeocodeAsync(db, customerId, "", "", null, null, "none", "not_found", "No address or postcode.");
+        return new CustomerMapGeocodeResult(customerId, "not_found", null, null, "none", "No address or postcode.");
+    }
+
+    var cached = await LoadCustomerMapCachedGeocodeAsync(db, customerId, source.AddressKey);
+    if (cached is not null)
+    {
+        return cached;
+    }
+
+    try
+    {
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(15);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("PaymentsenseMatchLab/1.0 internal-customer-map");
+        var queries = new[] { source.QueryText, source.FallbackQueryText }
+            .Where((query) => !string.IsNullOrWhiteSpace(query))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var query in queries)
+        {
+            var geocodeQuery = query!;
+            var url = $"https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=gb&q={Uri.EscapeDataString(geocodeQuery)}";
+            using var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+            {
+                var message = $"Geocoder returned HTTP {(int)response.StatusCode}.";
+                await SaveCustomerMapGeocodeAsync(db, customerId, source.AddressKey, geocodeQuery, null, null, "unknown", "error", message);
+                return new CustomerMapGeocodeResult(customerId, "error", null, null, "unknown", message);
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync();
+            using var document = await JsonDocument.ParseAsync(stream);
+            var first = document.RootElement.ValueKind == JsonValueKind.Array && document.RootElement.GetArrayLength() > 0
+                ? document.RootElement[0]
+                : default;
+
+            if (first.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var latitudeText = first.GetProperty("lat").GetString();
+            var longitudeText = first.GetProperty("lon").GetString();
+            if (!double.TryParse(latitudeText, CultureInfo.InvariantCulture, out var latitude) ||
+                !double.TryParse(longitudeText, CultureInfo.InvariantCulture, out var longitude))
+            {
+                await SaveCustomerMapGeocodeAsync(db, customerId, source.AddressKey, geocodeQuery, null, null, "unknown", "error", "Geocoder returned invalid coordinates.");
+                return new CustomerMapGeocodeResult(customerId, "error", null, null, "unknown", "Geocoder returned invalid coordinates.");
+            }
+
+            var type = first.TryGetProperty("type", out var typeElement) ? typeElement.GetString() : null;
+            var category = first.TryGetProperty("category", out var categoryElement) ? categoryElement.GetString() : null;
+            var accuracy = string.Equals(geocodeQuery, source.FallbackQueryText, StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(type, "postcode", StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(category, "place", StringComparison.OrdinalIgnoreCase)
+                ? "approximate"
+                : "address";
+
+            await SaveCustomerMapGeocodeAsync(db, customerId, source.AddressKey, geocodeQuery, latitude, longitude, accuracy, "mapped", null);
+            return new CustomerMapGeocodeResult(customerId, "mapped", latitude, longitude, accuracy, null);
+        }
+
+        await SaveCustomerMapGeocodeAsync(db, customerId, source.AddressKey, source.QueryText, null, null, "none", "not_found", "No geocoder result.");
+        return new CustomerMapGeocodeResult(customerId, "not_found", null, null, "none", "No geocoder result.");
+    }
+    catch (Exception ex)
+    {
+        await SaveCustomerMapGeocodeAsync(db, customerId, source.AddressKey, source.QueryText, null, null, "unknown", "error", ex.Message);
+        return new CustomerMapGeocodeResult(customerId, "error", null, null, "unknown", ex.Message);
+    }
+}
+
+static async Task<CustomerMapGeocodeSource?> LoadCustomerMapGeocodeSourceAsync(NpgsqlDataSource db, long customerId)
+{
+    await using var command = db.CreateCommand("""
+        with first_addresses as (
+          select distinct on (organisation_id)
+            organisation_id,
+            line1,
+            normalized_postcode
+          from paymentsense_core.addresses
+          order by organisation_id, id
+        )
+        select
+          o.display_name,
+          c.trading_name,
+          a.line1,
+          a.normalized_postcode
+        from paymentsense_core.customers c
+        join paymentsense_core.organisations o on o.id = c.organisation_id
+        left join first_addresses a on a.organisation_id = o.id
+        where c.id = @customer_id
+        """);
+    command.Parameters.AddWithValue("customer_id", customerId);
+    await using var reader = await command.ExecuteReaderAsync();
+    if (!await reader.ReadAsync())
+    {
+        return null;
+    }
+
+    var name = reader.GetNullableString(1) ?? reader.GetString(0);
+    var address = reader.GetNullableString(2);
+    var postcode = FormatUkPostcode(reader.GetNullableString(3));
+    var parts = new[] { name, address, postcode, "United Kingdom" }
+        .Where((part) => !string.IsNullOrWhiteSpace(part))
+        .Select((part) => part!.Trim());
+    var queryText = string.Join(", ", parts);
+    var fallbackQueryText = string.IsNullOrWhiteSpace(postcode) ? queryText : $"{postcode}, United Kingdom";
+    var key = NormalizeGeocodeAddressKey(queryText);
+    return new CustomerMapGeocodeSource(customerId, queryText, fallbackQueryText, key);
+}
+
+static async Task<CustomerMapGeocodeResult?> LoadCustomerMapCachedGeocodeAsync(NpgsqlDataSource db, long customerId, string addressKey)
+{
+    await using var command = db.CreateCommand("""
+        select latitude, longitude, accuracy, status, error_text
+        from paymentsense_core.customer_geocode_cache
+        where customer_id = @customer_id
+          and address_key = @address_key
+        """);
+    command.Parameters.AddWithValue("customer_id", customerId);
+    command.Parameters.AddWithValue("address_key", addressKey);
+    await using var reader = await command.ExecuteReaderAsync();
+    if (!await reader.ReadAsync())
+    {
+        return null;
+    }
+
+    return new CustomerMapGeocodeResult(
+        customerId,
+        reader.GetString(3),
+        reader.IsDBNull(0) ? null : reader.GetDouble(0),
+        reader.IsDBNull(1) ? null : reader.GetDouble(1),
+        reader.GetNullableString(2),
+        reader.GetNullableString(4));
+}
+
+static async Task SaveCustomerMapGeocodeAsync(
+    NpgsqlDataSource db,
+    long customerId,
+    string addressKey,
+    string queryText,
+    double? latitude,
+    double? longitude,
+    string accuracy,
+    string status,
+    string? errorText)
+{
+    await using var command = db.CreateCommand("""
+        insert into paymentsense_core.customer_geocode_cache (
+          customer_id,
+          address_key,
+          query_text,
+          latitude,
+          longitude,
+          accuracy,
+          status,
+          error_text
+        )
+        values (
+          @customer_id,
+          @address_key,
+          @query_text,
+          @latitude,
+          @longitude,
+          @accuracy,
+          @status,
+          @error_text
+        )
+        on conflict (customer_id) do update
+        set
+          address_key = excluded.address_key,
+          query_text = excluded.query_text,
+          latitude = excluded.latitude,
+          longitude = excluded.longitude,
+          accuracy = excluded.accuracy,
+          status = excluded.status,
+          error_text = excluded.error_text,
+          looked_up_at = now(),
+          updated_at = now()
+        """);
+    command.Parameters.AddWithValue("customer_id", customerId);
+    command.Parameters.AddWithValue("address_key", addressKey);
+    command.Parameters.AddWithValue("query_text", queryText);
+    command.Parameters.AddWithValue("latitude", (object?)latitude ?? DBNull.Value);
+    command.Parameters.AddWithValue("longitude", (object?)longitude ?? DBNull.Value);
+    command.Parameters.AddWithValue("accuracy", accuracy);
+    command.Parameters.AddWithValue("status", status);
+    command.Parameters.AddWithValue("error_text", (object?)errorText ?? DBNull.Value);
+    await command.ExecuteNonQueryAsync();
+}
+
+static string NormalizeGeocodeAddressKey(string value) =>
+    Regex.Replace(value.Trim().ToLower(CultureInfo.InvariantCulture), "[^a-z0-9]+", " ").Trim();
+
+static string? FormatUkPostcode(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return null;
+    }
+
+    var compact = value.Replace(" ", "", StringComparison.Ordinal).ToUpper(CultureInfo.InvariantCulture);
+    return compact.Length <= 3 ? compact : $"{compact[..^3]} {compact[^3..]}";
+}
+}
+
 internal static class TextNormalizer
 {
     private static readonly Regex NonAlphaNumeric = new("[^a-z0-9 ]+", RegexOptions.Compiled);
@@ -8565,6 +8984,12 @@ internal sealed record AiCompanyInsightJobPayload(string SearchName, string? Sea
 internal sealed record PaymentsenseAuthStatusResponse(bool Authenticated, string Url, string Title);
 internal sealed record ProspectResponse(long Id, string ProspectId, string BusinessName, DateTime AddedAt, DateOnly? CreatedOn, string? OwnerName, bool? HasPaymentsenseCustomerMatch, string? ContactName, string? ContactEmail, string? Postcode, string? Channel, string? Origin, string? AddressLine1, string? Town, string? County, string? ContactPhone, bool HasStoredDetail, bool HasLead);
 internal sealed record CustomerResponse(long Id, string CustomerKind, string? CustomerRef, string? Mid, DateTime AddedAt, string EntityName, string? TradingName, string? TradingAddress, string? Postcode, DateOnly? StartDate, string? Status, string? SuppressionReason, long? RegionId, string? RegionName, long? CustomerActivityStatusId, string? CustomerActivityStatusName, long? CustomerValueTypeId, string? CustomerValueTypeLabel, decimal? CustomerValueTypeDecimalValue, int? CustomerValueTypeShieldOrder, string? CustomerValueTypeImageFileName, long? AssignedUserId, string? AssignedUserName, bool IsBookmarked, bool HasAnyBookmark, bool HasNotes, bool HasOwnedChecklistMatch, bool HasStoredMatches, int AttachedProspectCount, bool HasLead, bool HasAiInsight, bool HasAiInsightJobScheduled);
+internal sealed record CustomerMapPageResponse(IReadOnlyList<CustomerMapRowResponse> Items, long Total, int Page, int PageSize);
+internal sealed record CustomerMapRowResponse(long Id, string? CustomerRef, string? Mid, DateTime AddedAt, string EntityName, string? TradingName, string? TradingAddress, string? Postcode, string? Status, long? RegionId, string? RegionName, long? CustomerActivityStatusId, string? CustomerActivityStatusName, long? CustomerValueTypeId, string? CustomerValueTypeLabel, long? AssignedUserId, string? AssignedUserName, bool IsBookmarked, bool HasStoredMatches, double? Latitude, double? Longitude, string? GeocodeAccuracy, string? GeocodeStatus);
+internal sealed record CustomerMapGeocodeRequest(IReadOnlyList<long> CustomerIds);
+internal sealed record CustomerMapGeocodeResponse(IReadOnlyList<CustomerMapGeocodeResult> Results);
+internal sealed record CustomerMapGeocodeResult(long CustomerId, string Status, double? Latitude, double? Longitude, string? Accuracy, string? Error);
+internal sealed record CustomerMapGeocodeSource(long CustomerId, string QueryText, string? FallbackQueryText, string AddressKey);
 internal sealed record CustomerSearchRequest(string Query, bool PersistToDatabase = true, long? RegionId = null);
 internal sealed record ProspectSearchRequest(string Query, bool PersistToDatabase = true);
 internal sealed record CustomerSearchPreviewResponse(string Query, string SearchUrl, IReadOnlyList<CustomerSearchRowResponse> Rows);
