@@ -1042,6 +1042,11 @@ button {
   display: none;
 }
 
+.geography-layout-map-expanded .geography-map-panel {
+  min-height: 0;
+  width: 100%;
+}
+
 .geography-list,
 .geography-map-panel {
   min-height: 0;
@@ -1089,6 +1094,10 @@ button {
   min-width: 780px;
 }
 
+.geography-table tbody tr {
+  cursor: pointer;
+}
+
 .geography-map-panel {
   background: #ffffff;
   border: 1px solid #dce1df;
@@ -1120,6 +1129,27 @@ button {
 
 .customer-map-marker span {
   line-height: 1;
+}
+
+.customer-map-marker.pulsing {
+  animation: customer-map-marker-pulse 900ms ease-out 0s 3;
+}
+
+@keyframes customer-map-marker-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(0, 127, 120, .55), 0 6px 18px rgba(0, 0, 0, .24);
+    transform: scale(1);
+  }
+
+  60% {
+    box-shadow: 0 0 0 16px rgba(0, 127, 120, 0), 0 6px 18px rgba(0, 0, 0, .24);
+    transform: scale(1.18);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 127, 120, 0), 0 6px 18px rgba(0, 0, 0, .24);
+    transform: scale(1);
+  }
 }
 
 .customer-map-marker.priority-very_low {

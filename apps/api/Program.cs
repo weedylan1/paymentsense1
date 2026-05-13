@@ -825,6 +825,8 @@ app.MapGet("/api/customer-map/customers", async (
     bool? onlyCancelled,
     bool? onlyMatched,
     string? leadPriority,
+    string? sortKey,
+    string? sortDirection,
     int? page,
     int? pageSize) =>
 {
@@ -884,6 +886,12 @@ app.MapGet("/api/customer-map/customers", async (
     }
 
     var whereClause = conditions.Count == 0 ? "" : $"where {string.Join(" and ", conditions)}";
+    var orderColumn = sortKey?.Trim() switch
+    {
+        "postcode" => "normalized_postcode",
+        _ => "display_name"
+    };
+    var orderDirection = string.Equals(sortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc";
     var sql = $"""
         with first_addresses as (
           select distinct on (organisation_id)
@@ -952,7 +960,7 @@ app.MapGet("/api/customer-map/customers", async (
         )
         select *
         from filtered
-        order by display_name asc, id asc
+        order by {orderColumn} {orderDirection}, id asc
         limit @take offset @offset
         """;
 

@@ -1017,7 +1017,7 @@ function App() {
     customerValueTypeId: "",
     assignedUserId: "",
     onlyBookmarked: false,
-    onlyCancelled: false,
+    onlyCancelled: true,
     onlyMatched: false,
     addedFrom: "",
     addedTo: "",
@@ -5591,6 +5591,8 @@ function CustomerGeographyView({
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const leafletMapRef = useRef<L.Map | null>(null);
   const markerLayerRef = useRef<L.LayerGroup | null>(null);
+  const pulseTimerRef = useRef<number | null>(null);
+  const [pulsingCustomerId, setPulsingCustomerId] = useState<number | null>(null);
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams();
@@ -5612,6 +5614,8 @@ function CustomerGeographyView({
     if (viewState.onlyCancelled) params.set("onlyCancelled", "true");
     if (viewState.onlyMatched) params.set("onlyMatched", "true");
     if (viewState.addedFrom && viewState.addedFrom !== "all") params.set("leadPriority", viewState.addedFrom);
+    params.set("sortKey", viewState.sortKey);
+    params.set("sortDirection", viewState.sortDirection);
     return params.toString();
   }, [page, pageSize, viewState]);
 
@@ -5644,11 +5648,19 @@ function CustomerGeographyView({
     markerLayerRef.current = markerLayer;
 
     return () => {
+      if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
       map.remove();
       leafletMapRef.current = null;
       markerLayerRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const map = leafletMapRef.current;
+    if (!map) return;
+    window.setTimeout(() => map.invalidateSize(), 80);
+    window.setTimeout(() => map.invalidateSize(), 260);
+  }, [mapExpanded]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("matchlab.geography.selection");
@@ -5738,6 +5750,7 @@ function CustomerGeographyView({
 
     setCurrentSavedMap(null);
     setMapSelectionSource("leads");
+    onViewStateChange((current) => ({ ...current, onlyCancelled: false }));
     setSelectedMapRows(nextRows);
     void geocodeRows(leadRowsToLoad.map((lead) => lead.customerId));
     setNotice({
@@ -5785,7 +5798,13 @@ function CustomerGeographyView({
     if (viewState.onlyMatched && !row.hasStoredMatches) return false;
     if (viewState.onlyCancelled && row.status?.toLowerCase() !== "cancelled") return false;
     return true;
-  });
+  }).sort((left, right) =>
+    compareValues(
+      viewState.sortKey === "postcode" ? left.postcode ?? "" : left.entityName,
+      viewState.sortKey === "postcode" ? right.postcode ?? "" : right.entityName,
+      viewState.sortDirection
+    )
+  );
   const displayedMapRows = mapSelectionSource === "leads" ? filteredLeadRows : selectedRows;
   const mappedSelectedRows = displayedMapRows.filter((row) => typeof row.latitude === "number" && typeof row.longitude === "number");
   const totalPages = Math.max(Math.ceil((state.data?.total ?? 0) / pageSize), 1);
@@ -5798,7 +5817,7 @@ function CustomerGeographyView({
     for (const row of mappedSelectedRows) {
       const marker = L.marker([row.latitude!, row.longitude!], {
         icon: L.divIcon({
-          className: `customer-map-marker priority-${row.leadPriority ?? "medium"}`,
+          className: `customer-map-marker priority-${row.leadPriority ?? "medium"}${pulsingCustomerId === row.id ? " pulsing" : ""}`,
           html: `<span>${escapeHtml(row.entityName.slice(0, 1).toUpperCase())}</span>`,
           iconSize: [30, 30],
           iconAnchor: [15, 15]
@@ -5813,7 +5832,38 @@ function CustomerGeographyView({
       `);
       marker.addTo(layer);
     }
-  }, [mappedSelectedRows]);
+  }, [mappedSelectedRows, pulsingCustomerId]);
+
+  function handleSort(nextKey: CustomerPageViewState["sortKey"]) {
+    onViewStateChange((current) => ({
+      ...current,
+      sortKey: nextKey,
+      sortDirection: current.sortKey === nextKey && current.sortDirection === "asc" ? "desc" : "asc"
+    }));
+    setPage(1);
+  }
+
+  function pulseMapPin(customerId: number) {
+    if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
+    setPulsingCustomerId(customerId);
+    pulseTimerRef.current = window.setTimeout(() => {
+      setPulsingCustomerId(null);
+      pulseTimerRef.current = null;
+    }, 3200);
+  }
+
+  function focusMapRow(row: CustomerMapRow) {
+    if (!selectedIds.has(row.id)) {
+      setSelectedMapRows((current) => ({
+        ...current,
+        [row.id]: { ...row, ...(coordinateOverrides[row.id] ?? {}) }
+      }));
+      if (!(typeof row.latitude === "number" && typeof row.longitude === "number")) {
+        void geocodeRows([row.id]);
+      }
+    }
+    pulseMapPin(row.id);
+  }
 
   function resetFilters() {
     onViewStateChange({
@@ -5824,7 +5874,7 @@ function CustomerGeographyView({
       customerValueTypeId: "",
       assignedUserId: "",
       onlyBookmarked: false,
-      onlyCancelled: false,
+      onlyCancelled: mapSelectionSource === "customers",
       onlyMatched: false,
       addedFrom: "",
       addedTo: "",
@@ -6054,6 +6104,7 @@ function CustomerGeographyView({
                 onClick={() => {
                   setSelectedMapRows({});
                   setMapSelectionSource("customers");
+                  onViewStateChange((current) => ({ ...current, onlyCancelled: true }));
                 }}
               >
                 Clear lead map
@@ -6065,13 +6116,21 @@ function CustomerGeographyView({
               className="geography-table"
               state={{ data: filteredLeadRows, loading: false }}
               emptyMessage="No selected leads match the current geography filters."
-              columns={["Map", "Lead", "User", "Address", "Postcode", "Priority", "Map status"]}
+              columns={[
+                "Map",
+                renderSortHeader("Lead", viewState.sortKey === "entityName", viewState.sortDirection, () => handleSort("entityName")),
+                "User",
+                "Address",
+                renderSortHeader("Postcode", viewState.sortKey === "postcode", viewState.sortDirection, () => handleSort("postcode")),
+                "Priority",
+                "Map status"
+              ]}
               renderRow={(row) => {
                 const mapping = mappingIds.has(row.id);
                 const mapped = typeof row.latitude === "number" && typeof row.longitude === "number";
                 return (
-                  <tr key={row.id} className="selected">
-                    <td><button className="icon-button" type="button" onClick={() => removeMappedLead(row)} title="Remove from map"><Trash2 size={15} aria-hidden /></button></td>
+                  <tr key={row.id} className="selected" onClick={() => focusMapRow(row)}>
+                    <td><button className="icon-button" type="button" onClick={(event) => { event.stopPropagation(); removeMappedLead(row); }} title="Remove from map"><Trash2 size={15} aria-hidden /></button></td>
                     <td><strong className="stacked">{row.entityName}</strong><span>{row.tradingName ?? row.customerRef ?? row.mid ?? ""}</span></td>
                     <td>{row.assignedUserName ?? "Unassigned"}</td>
                     <td className="truncate">{row.tradingAddress ?? ""}</td>
@@ -6098,14 +6157,21 @@ function CustomerGeographyView({
                 className="geography-table"
                 state={{ ...state, data: rows }}
                 emptyMessage="No customers match the current geography filters."
-                columns={["Map", "Customer", "Address", "Postcode", "Status", "Map status"]}
+                columns={[
+                  "Map",
+                  renderSortHeader("Customer", viewState.sortKey === "entityName", viewState.sortDirection, () => handleSort("entityName")),
+                  "Address",
+                  renderSortHeader("Postcode", viewState.sortKey === "postcode", viewState.sortDirection, () => handleSort("postcode")),
+                  "Status",
+                  "Map status"
+                ]}
                 renderRow={(row) => {
                   const selected = selectedIds.has(row.id);
                   const mapping = mappingIds.has(row.id);
                   const mapped = typeof row.latitude === "number" && typeof row.longitude === "number";
                   return (
-                    <tr key={row.id} className={selected ? "selected" : ""}>
-                      <td><input type="checkbox" checked={selected} onChange={(event) => toggleSelected(row, event.target.checked)} aria-label={`Show ${row.entityName} on map`} /></td>
+                    <tr key={row.id} className={selected ? "selected" : ""} onClick={() => focusMapRow(row)}>
+                      <td><input type="checkbox" checked={selected} onClick={(event) => event.stopPropagation()} onChange={(event) => toggleSelected(row, event.target.checked)} aria-label={`Show ${row.entityName} on map`} /></td>
                       <td><strong className="stacked">{row.entityName}</strong><span>{row.tradingName ?? row.customerRef ?? row.mid ?? ""}</span></td>
                       <td className="truncate">{row.tradingAddress ?? ""}</td>
                       <td className="mono">{row.postcode ?? ""}</td>
