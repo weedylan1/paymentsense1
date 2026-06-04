@@ -7,6 +7,17 @@ apps/web/node_modules
 apps/web/dist
 apps/api/bin
 apps/api/obj
+apps/worker/bin
+apps/worker/obj
+apps/migrator/bin
+apps/migrator/obj
+Telesale Services/bin
+Telesale Services/obj
+.dotnet
+.dotnet-cli
+.nuget
+.playwright-mcp
+.codex-temp
 playwright-report
 test-results
 *.log

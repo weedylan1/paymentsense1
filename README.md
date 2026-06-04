@@ -51,6 +51,31 @@ npm run web:dev
 
 The UI includes a `Seed Example` action that inserts a sample prospect/customer match into the persistent schema for manual testing.
 
+## Database Migrations
+
+Schema changes are stored as forward-only SQL files in `db/migrations`. Do not edit migrations that have already shipped; add a new numbered file instead.
+
+Before a production upgrade, take a database backup. Then run the migrator in plan mode:
+
+```powershell
+$env:DATABASE_URL="Host=localhost;Port=5432;Database=myapp;Username=postgres;Password=..."
+npm run db:migrate:plan
+```
+
+For an existing database that already has the current schema, run the baseline command once. This creates migration history and marks the current migration files as applied, but it does not execute the migration SQL:
+
+```powershell
+npm run db:migrate:baseline
+```
+
+After the database has been baselined, future releases can apply only new migration files:
+
+```powershell
+npm run db:migrate
+```
+
+If the plan shows unexpected pending migrations on an existing database, stop and investigate before running `db:migrate`.
+
 ## JSON Quiky Automation
 
 `tests/jsonquiky.spec.ts` opens `https://jester.click/jsonquiky/`, imports fixture JSON, checks Grid mode, edits the JSON in Raw mode, verifies Form mode, and confirms Export downloads a JSON file.

@@ -1,0 +1,245 @@
+Telesale Services API Guide
+===========================
+
+Read-only API for the external Telesales application to authenticate and retrieve assigned wave export JSON.
+
+
+Base URL
+--------
+
+Use the server IP address where the Docker container is running.
+
+Local on this PC:
+
+  http://127.0.0.1:5185
+
+From another PC on the network:
+
+  http://<server-ip>:5185
+
+
+Authentication
+--------------
+
+The Telesales app must first call the login endpoint.
+
+The returned token must be sent on later requests using the Authorization header:
+
+  Authorization: Bearer <token>
+
+The token currently expires after 12 hours.
+
+
+1. Login
+--------
+
+POST /api/login
+
+The login value is the Telesale username from the main app Users screen.
+
+The username is stored in the database as:
+
+  paymentsense_core.users.username
+
+Only Telesale users need a username. Main app users can leave it blank.
+The username cannot contain spaces.
+
+Request body:
+
+{
+  "login": "TE",
+  "password": "makemoney99$"
+}
+
+Success response:
+
+{
+  "token": "Bearer-token-value-here",
+  "expiresAt": "2026-05-21T21:33:55.4453222+00:00",
+  "user": {
+    "id": 5,
+    "fullName": "Teletest",
+    "email": null
+  }
+}
+
+
+2. Check Current User
+---------------------
+
+GET /api/me
+
+Headers:
+
+  Authorization: Bearer <token>
+
+Response:
+
+{
+  "id": 5,
+  "fullName": "Teletest",
+  "email": null
+}
+
+
+3. Get Waves For Logged-In User
+-------------------------------
+
+GET /api/waves
+
+Headers:
+
+  Authorization: Bearer <token>
+
+Returns the wave exports assigned to the logged-in Telesale user.
+
+Response:
+
+[
+  {
+    "exportId": 12,
+    "waveId": 3,
+    "campaignId": 1,
+    "campaignName": "Spring Campaign",
+    "waveName": "Wave 1",
+    "waveNumber": 1,
+    "leadCount": 40,
+    "sentAt": "2026-05-21T10:15:00Z"
+  }
+]
+
+
+4. Get Wave With Parsed JSON
+----------------------------
+
+GET /api/waves/{exportId}
+
+Headers:
+
+  Authorization: Bearer <token>
+
+Returns metadata plus the stored Telesale export JSON as an object.
+
+Response:
+
+{
+  "exportId": 12,
+  "waveId": 3,
+  "campaignId": 1,
+  "campaignName": "Spring Campaign",
+  "waveName": "Wave 1",
+  "waveNumber": 1,
+  "leadCount": 40,
+  "sentAt": "2026-05-21T10:15:00Z",
+  "exportJson": {
+    "waveId": 3,
+    "waveName": "Wave 1",
+    "exportedAt": "...",
+    "leads": [],
+    "responseStatusTypes": [],
+    "priorityTypes": []
+  }
+}
+
+
+5. Get Exact Original JSON
+--------------------------
+
+GET /api/waves/{exportId}/json
+
+Headers:
+
+  Authorization: Bearer <token>
+
+Use this endpoint when the other app wants the exact same JSON format as the existing Telesale download/export file.
+
+Response content type:
+
+  application/json; charset=utf-8
+
+
+6. Sync Local IndexedDB Changes
+-------------------------------
+
+POST /api/sync
+
+Headers:
+
+  Authorization: Bearer <token>
+
+The Telesales app keeps using its local IndexedDB structure and pushes changes to this endpoint.
+The service scopes all saved data to the logged-in Telesale user from the bearer token.
+
+Request body:
+
+{
+  "exportId": 12,
+  "leadStates": [
+    {
+      "leadId": 123,
+      "priority": "high",
+      "status": "open",
+      "responseStatus": "Called",
+      "notes": "Spoke to owner",
+      "isInteractionComplete": true,
+      "completionReason": "Interested"
+    }
+  ],
+  "interactions": [
+    {
+      "id": 1,
+      "leadId": 123,
+      "timestamp": "2026-05-22T11:39:00Z",
+      "outcome": "Answered",
+      "notes": "Call completed",
+      "type": "call"
+    }
+  ],
+  "followups": [
+    {
+      "id": 1,
+      "leadId": 123,
+      "scheduledTime": "2026-05-23T09:00:00Z",
+      "notes": "Call back",
+      "completed": false
+    }
+  ]
+}
+
+Success response:
+
+{
+  "exportId": 12,
+  "leadStateCount": 1,
+  "interactionCount": 1,
+  "followUpCount": 1
+}
+
+Alternative endpoint:
+
+  POST /api/waves/{exportId}/sync
+
+This accepts the same body, except exportId is taken from the URL.
+
+
+Error Codes
+-----------
+
+400
+  Login or password was missing, or the request body was invalid.
+
+401
+  Missing, invalid, or expired bearer token.
+
+404
+  The requested wave export does not exist for the logged-in user.
+
+
+Important Notes
+---------------
+
+- The external app is read-only against this API.
+- It does not write back to the stored JSON.
+- Only users marked as Telesale can log in.
+- The exact JSON endpoint returns the stored export JSON from the database.
+- That stored JSON was generated from the same code path as the existing Telesale download.

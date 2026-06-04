@@ -1,0 +1,204 @@
+FULL COPY OF THIS APP AND THIS DATABASE TO THE OTHER PC
+
+This file uses the actual plain SQL database backup created on this PC:
+
+  C:\Users\Dan Campbell\Documents\New project\myapp_full_migration_20260519-plain.sql
+
+That backup contains the current PostgreSQL database from this PC.
+
+Backup verification on this PC:
+
+  Customers: 2391
+  Leads: 31
+  Quotes: 102
+
+
+REQUIREMENTS ON THE OTHER PC
+
+Docker Desktop must be installed and running.
+Node.js / NPM must be installed if Paymentsense authentication needs to be refreshed on that PC.
+
+
+STEP 1 - COPY FILES TO THE OTHER PC
+
+Copy the whole project folder from this PC to the other PC:
+
+  C:\Users\Dan Campbell\Documents\New project
+
+Make sure this file is present on the other PC after copying:
+
+  C:\Users\Dan Campbell\Documents\New project\myapp_full_migration_20260519-plain.sql
+
+
+STEP 2 - OPEN POWERSHELL ON THE OTHER PC
+
+Run:
+
+  cd "C:\Users\Dan Campbell\Documents\New project"
+
+
+STEP 3 - STOP AND REMOVE OLD APP CONTAINERS ON THE OTHER PC
+
+Run:
+
+  docker stop paymentsense-matchlab-api paymentsense-matchlab-web paymentsense-matchlab-worker dockerdata-postgres-1 rabbitmq
+
+If Docker says a container does not exist, continue.
+
+Run:
+
+  docker rm paymentsense-matchlab-api paymentsense-matchlab-web paymentsense-matchlab-worker dockerdata-postgres-1 rabbitmq
+
+If Docker says a container does not exist, continue.
+
+
+STEP 4 - REMOVE OLD DATABASE AND RABBITMQ VOLUMES ON THE OTHER PC
+
+This deletes the old data on the other PC.
+
+Run:
+
+  docker volume rm dockerdata_postgres-data rabbitmq-data
+
+If Docker says a volume does not exist, continue.
+
+
+STEP 5 - CREATE A FRESH POSTGRESQL CONTAINER ON THE OTHER PC
+
+Run:
+
+  docker run -d --name dockerdata-postgres-1 `
+    -e POSTGRES_PASSWORD=SuperSecret123! `
+    -e POSTGRES_DB=myapp `
+    -p 5432:5432 `
+    -v dockerdata_postgres-data:/var/lib/postgresql/data `
+    postgres:16
+
+
+STEP 6 - CREATE A FRESH RABBITMQ CONTAINER ON THE OTHER PC
+
+Run:
+
+  docker run -d --name rabbitmq `
+    -e RABBITMQ_DEFAULT_USER=admin `
+    -e RABBITMQ_DEFAULT_PASS=SuperSecret123! `
+    -p 5672:5672 `
+    -p 15672:15672 `
+    -v rabbitmq-data:/var/lib/rabbitmq `
+    rabbitmq:3-management
+
+
+STEP 7 - WAIT FOR POSTGRESQL TO START
+
+Run:
+
+  Start-Sleep -Seconds 15
+
+
+STEP 8 - RESTORE THE FULL DATABASE BACKUP ON THE OTHER PC
+
+Run:
+
+  docker cp .\myapp_full_migration_20260519-plain.sql dockerdata-postgres-1:/tmp/myapp_full_migration_20260519-plain.sql
+
+Run:
+
+  docker exec -i dockerdata-postgres-1 psql -U postgres -d myapp -v ON_ERROR_STOP=1 -f /tmp/myapp_full_migration_20260519-plain.sql
+
+
+STEP 9 - CHECK THE DATABASE RESTORE ON THE OTHER PC
+
+Run:
+
+  docker exec dockerdata-postgres-1 psql -U postgres -d myapp -c "select count(*) as customers from paymentsense_core.customers;"
+
+Run:
+
+  docker exec dockerdata-postgres-1 psql -U postgres -d myapp -c "select count(*) as leads from paymentsense_core.leads;"
+
+Run:
+
+  docker exec dockerdata-postgres-1 psql -U postgres -d myapp -c "select count(*) as quotes from paymentsense_core.sales_quotes;"
+
+Expected results:
+
+  Customers: 2391
+  Leads: 31
+  Quotes: 102
+
+
+STEP 10 - BUILD AND START THE APP ON THE OTHER PC
+
+Run:
+
+  docker compose up -d --build
+
+
+STEP 11 - CHECK ALL CONTAINERS ARE RUNNING
+
+Run:
+
+  docker ps
+
+You should see:
+
+  paymentsense-matchlab-api
+  paymentsense-matchlab-web
+  paymentsense-matchlab-worker
+  dockerdata-postgres-1
+  rabbitmq
+
+
+STEP 12 - OPEN THE APP
+
+Open:
+
+  http://localhost:5173
+
+
+STEP 13 - PAYMENTSENSE AUTH
+
+In the app, go to:
+
+  Operations > Paymentsense Reset
+
+Click:
+
+  Test Auth
+
+If Test Auth works, no further auth work is needed.
+
+If Test Auth fails, Node.js / NPM is required on the other PC.
+
+Run:
+
+  npm install
+
+Run:
+
+  npm run auth:paymentsense
+
+Complete the Paymentsense login in the browser window.
+
+Then run:
+
+  npm run test:paymentsense
+
+
+STEP 14 - FINAL CHECK
+
+Open:
+
+  http://localhost:5173
+
+Check:
+
+  Customers
+  Leads
+  Quotes
+  Campaigns
+  Operations
+
+To refresh live quote data from Paymentsense:
+
+  Leads > Quotes > Refresh Quotes

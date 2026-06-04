@@ -14,7 +14,7 @@ ENV NODE_PATH=/automation/node_modules
 EXPOSE 8080
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg postgresql-client \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
@@ -25,10 +25,14 @@ RUN apt-get update \
 COPY package.json package-lock.json /automation/
 WORKDIR /automation
 RUN npm ci
+RUN npx playwright install --with-deps chromium
 
+COPY playwright.config.ts tsconfig.json /automation/
+COPY tests /automation/tests
 COPY scripts /scripts
 COPY playwright/.auth /playwright/.auth
-RUN npx playwright install --with-deps chromium
+RUN rm -rf /automation/playwright \
+    && ln -s /playwright /automation/playwright
 
 WORKDIR /app
 COPY --from=build /app/publish .

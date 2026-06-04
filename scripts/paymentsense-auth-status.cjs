@@ -13,7 +13,7 @@ async function main() {
   try {
     const context = await browser.newContext({ storageState: authState });
     const page = await context.newPage();
-    await page.goto(targetUrl, { waitUntil: "networkidle", timeout: 60000 });
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.waitForTimeout(2000);
 
     const unauthenticated = await page.getByRole("heading", { name: "Sign in to search" }).isVisible().catch(() => false);

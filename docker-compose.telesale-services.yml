@@ -1,0 +1,19 @@
+name: telesale-services
+
+services:
+  telesale-services:
+    build:
+      context: .
+      dockerfile: Telesale Services/Dockerfile
+    container_name: TelesaleServices
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      DATABASE_URL: Host=host.docker.internal;Port=5432;Database=myapp;Username=postgres;Password=SuperSecret123!
+      SERVICE_NAME: Telesale Services
+      TELESALE_SERVICES_TOKEN_SECRET: local-development-telesale-services-secret
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "5185:8080"
+    restart: unless-stopped

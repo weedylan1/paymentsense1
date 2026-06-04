@@ -9,4 +9,6 @@ test("opens Paymentsense Search with saved authentication", async ({ page }) => 
 
   await expect(page).toHaveTitle(/Search/i);
   await expect(page.getByRole("heading", { name: "Sign in to search" })).toBeHidden();
+  await expect(page).not.toHaveURL(/\/landing/i);
+  await expect(page.getByPlaceholder("Search...")).toBeVisible();
 });

@@ -13,10 +13,11 @@ services:
       RabbitMq__Password: SuperSecret123!
       RabbitMq__VHost: /
       RabbitMq__ManagementBaseUrl: http://host.docker.internal:15672
+      TelesaleServices__BaseUrl: http://host.docker.internal:5185
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./playwright/.auth:/playwright/.auth:ro
+      - ./playwright/.auth:/playwright/.auth
     ports:
       - "5157:8080"
     restart: unless-stopped
@@ -44,6 +45,7 @@ services:
       RabbitMq__Password: SuperSecret123!
       RabbitMq__VHost: /
       RabbitMq__ManagementBaseUrl: http://host.docker.internal:15672
+      Api__BaseUrl: http://api:8080
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

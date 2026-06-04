@@ -36,6 +36,7 @@ internal sealed class JobWorkerService(
     private readonly string _rabbitPassword = configuration["RabbitMq:Password"] ?? "SuperSecret123!";
     private readonly string _rabbitVHost = configuration["RabbitMq:VHost"] ?? "/";
     private readonly string _geminiModel = configuration["Gemini:Model"] ?? "gemini-3-flash-preview";
+    private readonly string _apiBaseUrl = configuration["Api:BaseUrl"] ?? "http://api:8080";
     private IConnection? _connection;
     private IModel? _channel;
 
@@ -236,6 +237,7 @@ internal sealed class JobWorkerService(
             var resultJson = job.JobType switch
             {
                 "ai_company_insight" => await ExecuteAiCompanyInsightJobAsync(job, stoppingToken),
+                "paymentsense_quotes_refresh" => await ExecutePaymentsenseQuotesRefreshJobAsync(job, stoppingToken),
                 _ => throw new InvalidOperationException($"Unsupported job type '{job.JobType}'.")
             };
 
@@ -380,6 +382,29 @@ internal sealed class JobWorkerService(
         }, JsonDefaults.Options);
 
         return result;
+    }
+
+    private async Task<string> ExecutePaymentsenseQuotesRefreshJobAsync(QueuedJobWorkerRow job, CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.Deserialize<PaymentsenseQuotesRefreshJobPayload>(job.PayloadJson, JsonDefaults.Options)
+            ?? new PaymentsenseQuotesRefreshJobPayload(true);
+
+        await SetCurrentStepAsync(job.Id, "Refreshing Paymentsense quotes", cancellationToken);
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(payload.IncludeProspectDetails ? 20 : 5);
+        var includeDetails = payload.IncludeProspectDetails ? "true" : "false";
+        using var response = await client.PostAsync(
+            $"{_apiBaseUrl.TrimEnd('/')}/api/operations/paymentsense-quotes/import?includeProspectDetails={includeDetails}",
+            content: null,
+            cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException($"Paymentsense quote refresh failed: HTTP {(int)response.StatusCode} {body}");
+        }
+
+        await SetCurrentStepAsync(job.Id, "Paymentsense quotes refreshed", cancellationToken);
+        return body;
     }
 
     private async Task<JsonDocument> RunGeminiInsightSearchAsync(string apiKey, string searchName, string? searchLocation, CancellationToken cancellationToken)
@@ -738,6 +763,7 @@ internal sealed class JobWorkerService(
 internal sealed record JobOutboxDispatchRow(long OutboxId, long JobId, string Status, bool CancelRequested, bool IsRemoved);
 internal sealed record QueuedJobWorkerRow(long Id, string JobType, string PayloadJson, long? RequestedByUserId);
 internal sealed record AiCompanyInsightJobPayload(string SearchName, string? SearchLocation, long? CustomerId, bool SaveToDatabase);
+internal sealed record PaymentsenseQuotesRefreshJobPayload(bool IncludeProspectDetails);
 
 internal static class JsonDefaults
 {

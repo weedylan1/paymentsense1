@@ -1,7 +1,7 @@
 ﻿import { Fragment, StrictMode, useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
+import type { Dispatch, FormEvent, MouseEvent, ReactNode, SetStateAction } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, Archive, ArrowLeft, ArrowRight, BadgeCheck, Ban, Bookmark, BookmarkCheck, Building2, Calendar, ChevronDown, ChevronRight, CircleAlert, CircleHelp, Copy, Database, Download, ExternalLink, Eye, EyeOff, FileText, Filter, GitCompareArrows, Globe, Hash, Info, Loader2, MapPin, MapPinned, Megaphone, Search, SearchCheck, Smile, Trash2, Users } from "lucide-react";
+import { Activity, Archive, ArrowLeft, ArrowRight, BadgeCheck, Ban, Bookmark, BookmarkCheck, Building2, Calendar, ChevronDown, ChevronRight, CircleAlert, CircleHelp, Copy, Database, Download, ExternalLink, Eye, EyeOff, FileText, Filter, GitCompareArrows, Globe, Hash, Info, Loader2, MapPin, MapPinned, Megaphone, MessageSquare, Search, SearchCheck, Smile, Trash2, Users } from "lucide-react";
 import L from "leaflet";
 import { GoogleGenAI, Type } from "@google/genai";
 import "leaflet/dist/leaflet.css";
@@ -57,9 +57,18 @@ type ActivityEvent = {
   isNotifiable: boolean;
 };
 
+type DataChangeNotice = {
+  latestEventId: number;
+  latestEvent?: ActivityEvent;
+  customerCount: number;
+  prospectCount: number;
+  leadCount: number;
+  totalCount: number;
+};
+
 type Lead = {
   id: number;
-  customerId: number;
+  customerId?: number;
   leadStatus: string;
   leadPriority: LeadPriority;
   assignedUserId?: number;
@@ -79,6 +88,10 @@ type Lead = {
   customerValueTypeLabel?: string;
   contactPhone?: string;
   contactEmail?: string;
+  responseStatus?: string;
+  sourceType: string;
+  createdFromQuote: boolean;
+  sourceQuoteId?: string;
   prospects?: LeadProspect[];
   prospectCount: number;
   contactHistoryCount: number;
@@ -86,6 +99,7 @@ type Lead = {
 
 type LeadDetail = Lead & {
   commercials?: CustomerCommercials;
+  aiInsight?: CustomerAiInsightSummary;
   prospects: LeadProspect[];
   contactHistory: LeadContactHistory[];
 };
@@ -120,6 +134,7 @@ type LeadContactHistoryFormState = {
   reason: string;
   whoBy: string;
   responseStatus: string;
+  notes: string;
 };
 
 type LeadNote = {
@@ -151,7 +166,81 @@ type User = {
   phone?: string;
   email?: string;
   color?: string;
+  userType?: string;
+  username?: string;
+  hasPassword: boolean;
+  telesalePassword?: string;
   createdAt: string;
+};
+
+type CalendarEntryType = {
+  id: number;
+  label: string;
+  shouldNotifyUser: boolean;
+  priority: LeadPriority;
+  overduePriority: LeadPriority;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type CalendarEntry = {
+  id: number;
+  entryTypeName: string;
+  entryTypeCode: string;
+  title: string;
+  description?: string;
+  ownerUserId?: number;
+  ownerName?: string;
+  createdByUserId?: number;
+  createdByName?: string;
+  scope: "user" | "system";
+  status: string;
+  startsAt?: string;
+  endsAt?: string;
+  completedAt?: string;
+  priority: string;
+  triggerType?: string;
+  jobType?: string;
+  queuedJobId?: number;
+  sourceEntityType?: string;
+  sourceEntityId?: number;
+  createdAt: string;
+  updatedAt: string;
+  participantUserIds: number[];
+  participantNames?: string;
+};
+
+type CalendarMode = "day" | "week" | "month" | "year";
+
+type CalendarEntryDraft = {
+  id?: number;
+  title: string;
+  description: string;
+  calendarEntryTypeId: string;
+  startsAt: string;
+  endsAt: string;
+  ownerUserIds: Record<string, boolean>;
+};
+
+type CalendarEntryModalState = {
+  mode: "create" | "edit";
+  draft: CalendarEntryDraft;
+  entry?: CalendarEntry;
+};
+
+type ReviewScheduleTarget = {
+  entityType: "customer" | "prospect";
+  entityId?: number;
+  label: string;
+  reference?: string;
+};
+
+type CalendarSourceNavigation = {
+  entityType: string;
+  entityId?: number;
+  title: string;
 };
 
 type Campaign = {
@@ -179,6 +268,9 @@ type CampaignWave = {
   status: string;
   assignedTeamOrUser?: string;
   createdAt: string;
+  lastTelesaleSentAt?: string;
+  telesaleSendCount: number;
+  telesaleUsers?: string;
 };
 
 type SearchRun = {
@@ -189,6 +281,87 @@ type SearchRun = {
   completedAt?: string;
   countsJson: string;
   notes?: string;
+};
+
+type SalesQuote = {
+  quoteId: string;
+  prospectId: string;
+  businessName?: string;
+  primaryContactName?: string;
+  status: string;
+  ownerName?: string;
+  isCompleted?: boolean;
+  ltv?: number;
+  commissionBase?: number;
+  commission?: number;
+  ltvCurrencyCode?: string;
+  commissionCurrencyCode?: string;
+  underwritingCaseStatus?: string;
+  quoteCreatedAt?: string;
+  lastStatusChangeAt?: string;
+  quoteUrl?: string;
+  prospectUrl?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  updatedAt: string;
+  postcode?: string;
+  isBookmarked: boolean;
+  hasProspectDetail: boolean;
+  createdLeadId?: number;
+  latestChangeAt?: string;
+  latestChangeSummary?: string;
+  latestChangeFieldCount: number;
+  isArchived: boolean;
+  archivedAt?: string;
+  importState: "new" | "modified" | "removed" | "unchanged";
+};
+
+type SalesQuoteChange = {
+  id: number;
+  quoteId: string;
+  searchRunId?: number;
+  changedAt: string;
+  changeSource: string;
+  fieldNames: string[];
+  previousValues: Record<string, unknown>;
+  newValues: Record<string, unknown>;
+};
+
+type ProspectAddress = {
+  line1?: string;
+  line2?: string;
+  town?: string;
+  county?: string;
+  postcode?: string;
+  country?: string;
+};
+
+type ProspectContact = {
+  name?: string;
+  phone?: string;
+  email?: string;
+};
+
+type SalesQuoteProspectDetail = {
+  prospectId: string;
+  businessName?: string;
+  channel?: string;
+  origin?: string;
+  createdOn?: string;
+  ownerName?: string;
+  hasPaymentsenseCustomerMatch?: boolean;
+  address: ProspectAddress;
+  contact: ProspectContact;
+  sourceUrl?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  updatedAt: string;
+};
+
+type SalesQuoteDetail = {
+  quote: SalesQuote;
+  prospectDetail?: SalesQuoteProspectDetail;
+  changeHistory: SalesQuoteChange[];
 };
 
 type Prospect = {
@@ -210,6 +383,18 @@ type Prospect = {
   contactPhone?: string;
   hasStoredDetail: boolean;
   hasLead: boolean;
+  hasCustomerAttachment: boolean;
+};
+
+type ProspectWaveMembership = {
+  prospectId: number;
+  prospectReference: string;
+  businessName: string;
+  leadId: number;
+  campaignName: string;
+  waveId: number;
+  waveName: string;
+  waveNumber: number;
 };
 
 type Customer = {
@@ -456,7 +641,9 @@ type AiInsightContext = {
   customerLabel?: string;
   tradingName?: string;
   postcode?: string;
-  sourceView?: "customers" | "dashboard";
+  sourceView?: "customers" | "dashboard" | "leads";
+  leadId?: number;
+  sourceLabel?: string;
 };
 
 type CustomerAiInsightSummary = {
@@ -480,6 +667,64 @@ type CustomerRowContextMenuState = {
   customer: Customer;
   x: number;
   y: number;
+};
+
+type QuoteRowContextMenuState = {
+  quote: SalesQuote;
+  x: number;
+  y: number;
+};
+
+type QuoteArchiveModalState = {
+  quote: SalesQuote;
+  saving: boolean;
+};
+
+type TelesaleWaveSendModalState = {
+  campaign: Campaign;
+  wave: CampaignWave;
+  selectedUserIds: Record<number, boolean>;
+  saving: boolean;
+};
+
+type TelesaleLeadInteractionSummary = {
+  leadId: number;
+  interactionCount: number;
+  lastInteractionAt: string;
+  telesaleUsers?: string;
+};
+
+type TelesaleLeadInteractionDetail = {
+  occurredAt: string;
+  activityType: string;
+  title: string;
+  details?: string;
+  telesaleUser?: string;
+  campaignName?: string;
+  waveName?: string;
+};
+
+type TelesaleLeadInteractionModalState = {
+  waveId: number;
+  lead: Lead;
+  state: LoadState<TelesaleLeadInteractionDetail[]>;
+};
+
+type WaveLeadContactHistoryModalState = {
+  waveId: number;
+  lead: Lead;
+  form: LeadContactHistoryFormState;
+  saving: boolean;
+};
+
+type WaveLeadTelesalesInstructionModalState = {
+  waveId: number;
+  lead: Lead;
+  form: {
+    instructionText: string;
+    priority: LeadPriority;
+  };
+  saving: boolean;
 };
 
 type CustomerBusinessTypeOption = {
@@ -507,6 +752,14 @@ type CustomerActivityStatusOption = {
 };
 
 type LeadStatusOption = {
+  id: number;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ResponseStatusOption = {
   id: number;
   name: string;
   sortOrder: number;
@@ -571,11 +824,26 @@ type LeadSummary = {
   createdAt: string;
 };
 
+type LeadCampaignMembership = {
+  leadId: number;
+  campaignId: number;
+  campaignName: string;
+  waveId: number;
+  waveName: string;
+  waveNumber: number;
+};
+
 type LeadViewState = {
   searchText: string;
   statusFilter: string;
   priorityFilter: string;
   assignedUserId: string;
+  filterCampaignId: string;
+  excludeCampaign: boolean;
+  filterWaveId: string;
+  excludeWave: boolean;
+  createdFrom?: string;
+  createdTo?: string;
   selectedCampaignId: string;
   selectedWaveId: string;
   sortKey: "id" | "customerName" | "assignedUserName" | "tradingName" | "postcode" | "leadPriority" | "prospectCount" | "contactHistoryCount" | "leadStatus" | "createdAt";
@@ -650,19 +918,8 @@ type ProspectDetail = {
   ownerName?: string;
   salesUrl?: string;
   hasPaymentsenseCustomerMatch?: boolean;
-  address: {
-    line1?: string;
-    line2?: string;
-    town?: string;
-    county?: string;
-    postcode?: string;
-    country?: string;
-  };
-  contact: {
-    name?: string;
-    phone?: string;
-    email?: string;
-  };
+  address: ProspectAddress;
+  contact: ProspectContact;
   extractedNow: boolean;
 };
 
@@ -721,12 +978,13 @@ type LoadState<T> = {
   loading: boolean;
 };
 
-type ProspectPageSortKey = "businessName" | "contactName" | "postcode" | "addedAt";
+type ProspectPageSortKey = "businessName" | "contactName" | "ownerName" | "postcode" | "addedAt";
 type ProspectTestSortKey = "prospectId" | "businessName" | "contactName" | "createdOn";
 type CustomerPageSortKey = "entityName" | "tradingName" | "postcode" | "addedAt";
 type ProspectPageViewState = {
   searchText: string;
   searchDetails: boolean;
+  ownerFilter?: string;
   addedFrom?: string;
   addedTo?: string;
   sortKey: ProspectPageSortKey;
@@ -738,7 +996,10 @@ type CustomerPageViewState = {
   regionId?: string;
   customerActivityStatusId?: string;
   customerValueTypeId?: string;
+  businessTypeId?: string;
   assignedUserId?: string;
+  waveId?: string;
+  excludeWave?: boolean;
   onlyBookmarked?: boolean;
   onlyMapped?: boolean;
   onlyCancelled: boolean;
@@ -830,6 +1091,19 @@ type LeadStatusFormState = {
   sortOrder: string;
 };
 
+type ResponseStatusFormState = {
+  name: string;
+  sortOrder: string;
+};
+
+type CalendarEntryTypeFormState = {
+  label: string;
+  shouldNotifyUser: boolean;
+  priority: LeadPriority;
+  overduePriority: LeadPriority;
+  sortOrder: string;
+};
+
 type BusinessTypeFormState = {
   name: string;
   sicCodeInput: string;
@@ -846,10 +1120,24 @@ type UserFormState = {
   phone: string;
   email: string;
   color: string;
+  userType: string;
+  username: string;
+  password: string;
 };
 
 type GeminiSettingsState = {
   apiKey: string;
+};
+
+type PaymentsenseAuthOperation = {
+  success: boolean;
+  command: string;
+  exitCode: number;
+  timedOut: boolean;
+  authPath: string;
+  outputText: string;
+  errorOutputText: string;
+  errorText?: string;
 };
 
 const userColorOptions = [
@@ -928,10 +1216,12 @@ type CampaignWaveFormState = {
 function App() {
   const [activeView, setActiveView] = useState("dashboard");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [dataRefreshEventId, setDataRefreshEventId] = useState(0);
   const [currentUserId, setCurrentUserId] = useState(() => window.localStorage.getItem(actorUserStorageKey) ?? "");
   const dashboard = useApi<Dashboard>("/api/dashboard", refreshKey);
   const dashboardStatistics = useApi<DashboardStatisticsSnapshot>("/api/dashboard/statistics", refreshKey);
   const searchRuns = useApi<SearchRun[]>("/api/search-runs", refreshKey);
+  const salesQuotes = useApi<SalesQuote[]>("/api/paymentsense-quotes", refreshKey);
   const prospects = useApi<Prospect[]>("/api/prospects", refreshKey);
   const customers = useApi<Customer[]>("/api/customers", refreshKey, currentUserId);
   const regions = useApi<Region[]>("/api/regions", refreshKey);
@@ -941,10 +1231,12 @@ function App() {
   const aiCompanyInsights = useApi<AiCompanyInsight[]>("/api/ai-company-insights", refreshKey);
   const customerActivityStatuses = useApi<CustomerActivityStatusOption[]>("/api/customer-activity-statuses", refreshKey);
   const leadStatuses = useApi<LeadStatusOption[]>("/api/lead-statuses", refreshKey);
+  const responseStatuses = useApi<ResponseStatusOption[]>("/api/response-statuses", refreshKey);
   const leads = useApi<Lead[]>("/api/leads", refreshKey);
   const matches = useApi<MatchCandidate[]>("/api/matches", refreshKey);
   const gdpr = useApi<GdprEntry[]>("/api/gdpr", refreshKey);
   const users = useApi<User[]>("/api/users", refreshKey);
+  const calendarEntryTypes = useApi<CalendarEntryType[]>("/api/calendar-entry-types", refreshKey);
   const campaigns = useApi<Campaign[]>("/api/campaigns", refreshKey);
   const savedCustomerMaps = useApi<SavedCustomerMap[]>("/api/customer-map/saved", refreshKey);
   const activityEvents = useActivityEvents(refreshKey, currentUserId);
@@ -968,6 +1260,7 @@ function App() {
   const [prospectViewState, setProspectViewState] = useState<ProspectPageViewState>({
     searchText: "",
     searchDetails: false,
+    ownerFilter: "",
     addedFrom: "",
     addedTo: "",
     sortKey: "businessName",
@@ -979,7 +1272,10 @@ function App() {
     regionId: "",
     customerActivityStatusId: "",
     customerValueTypeId: "",
+    businessTypeId: "",
     assignedUserId: "",
+    waveId: "",
+    excludeWave: false,
     onlyBookmarked: false,
     onlyMapped: false,
     onlyCancelled: true,
@@ -998,7 +1294,10 @@ function App() {
     regionId: "",
     customerActivityStatusId: "",
     customerValueTypeId: "",
+    businessTypeId: "",
     assignedUserId: "",
+    waveId: "",
+    excludeWave: false,
     onlyBookmarked: false,
     onlyMapped: false,
     onlyCancelled: false,
@@ -1014,7 +1313,10 @@ function App() {
     regionId: "",
     customerActivityStatusId: "",
     customerValueTypeId: "",
+    businessTypeId: "",
     assignedUserId: "",
+    waveId: "",
+    excludeWave: false,
     onlyBookmarked: false,
     onlyMapped: false,
     onlyCancelled: false,
@@ -1030,7 +1332,10 @@ function App() {
     regionId: "",
     customerActivityStatusId: "",
     customerValueTypeId: "",
+    businessTypeId: "",
     assignedUserId: "",
+    waveId: "",
+    excludeWave: false,
     onlyBookmarked: false,
     onlyMapped: false,
     onlyCancelled: false,
@@ -1046,7 +1351,10 @@ function App() {
     regionId: "",
     customerActivityStatusId: "",
     customerValueTypeId: "",
+    businessTypeId: "",
     assignedUserId: "",
+    waveId: "",
+    excludeWave: false,
     onlyBookmarked: false,
     onlyMapped: false,
     onlyCancelled: true,
@@ -1061,6 +1369,7 @@ function App() {
   const [prospectCleanseViewState, setProspectCleanseViewState] = useState<ProspectPageViewState>({
     searchText: "",
     searchDetails: false,
+    ownerFilter: "",
     addedFrom: "",
     addedTo: "",
     sortKey: "businessName",
@@ -1071,6 +1380,12 @@ function App() {
     statusFilter: "all",
     priorityFilter: "all",
     assignedUserId: "",
+    filterCampaignId: "",
+    excludeCampaign: false,
+    filterWaveId: "",
+    excludeWave: false,
+    createdFrom: "",
+    createdTo: "",
     selectedCampaignId: "",
     selectedWaveId: "",
     sortKey: "createdAt",
@@ -1086,7 +1401,10 @@ function App() {
     initials: "",
     phone: "",
     email: "",
-    color: userColorOptions[0].value
+    color: userColorOptions[0].value,
+    userType: "",
+    username: "",
+    password: ""
   });
   const [regionForm, setRegionForm] = useState<RegionFormState>({
     name: ""
@@ -1097,6 +1415,17 @@ function App() {
   });
   const [leadStatusForm, setLeadStatusForm] = useState<LeadStatusFormState>({
     name: "",
+    sortOrder: ""
+  });
+  const [responseStatusForm, setResponseStatusForm] = useState<ResponseStatusFormState>({
+    name: "",
+    sortOrder: ""
+  });
+  const [calendarEntryTypeForm, setCalendarEntryTypeForm] = useState<CalendarEntryTypeFormState>({
+    label: "",
+    shouldNotifyUser: false,
+    priority: "medium",
+    overduePriority: "high",
     sortOrder: ""
   });
   const [geminiSettingsForm, setGeminiSettingsForm] = useState<GeminiSettingsState>({
@@ -1125,8 +1454,25 @@ function App() {
   const [operationsCollapsed, setOperationsCollapsed] = useState(false);
   const viewScrollPositionsRef = useRef<Record<string, number>>({});
   const pendingScrollRestoreRef = useRef<{ view: string; top: number; attempts: number } | null>(null);
-  const refreshData = () => setRefreshKey((current) => current + 1);
+  const latestActivityEventId = (activityEvents.state.data ?? []).reduce((max, event) => Math.max(max, event.id), 0);
+  const dataChangeNotice = useMemo(
+    () => buildDataChangeNotice(activityEvents.state.data ?? [], dataRefreshEventId),
+    [activityEvents.state.data, dataRefreshEventId]
+  );
+  const customerDataChangeNotice = dataChangeNotice.customerCount > 0 ? dataChangeNotice : null;
+  const prospectDataChangeNotice = dataChangeNotice.prospectCount > 0 ? dataChangeNotice : null;
+  const leadDataChangeNotice = dataChangeNotice.leadCount > 0 || dataChangeNotice.customerCount > 0 ? dataChangeNotice : null;
+  const refreshData = () => {
+    setDataRefreshEventId(Math.max(dataRefreshEventId, latestActivityEventId));
+    setRefreshKey((current) => current + 1);
+  };
   const currentUser = (users.data ?? []).find((user) => String(user.id) === currentUserId) ?? null;
+
+  useEffect(() => {
+    if (dataRefreshEventId === 0 && latestActivityEventId > 0) {
+      setDataRefreshEventId(latestActivityEventId);
+    }
+  }, [dataRefreshEventId, latestActivityEventId]);
 
   useEffect(() => {
     window.localStorage.setItem(actorUserStorageKey, currentUserId);
@@ -1194,13 +1540,51 @@ function App() {
     navigateToView("ai-company-insight");
   }
 
+  function openAiCompanyInsightForLead(lead: Pick<LeadDetail, "id" | "customerId" | "customerName" | "tradingName" | "postcode" | "sourceType" | "createdFromQuote">) {
+    setAiInsightContext({
+      customerId: lead.customerId,
+      customerLabel: lead.customerName,
+      tradingName: lead.tradingName || lead.customerName,
+      postcode: lead.postcode,
+      sourceView: "leads",
+      leadId: lead.id,
+      sourceLabel: getLeadSourceLabel(lead)
+    });
+    navigateToView("ai-company-insight");
+  }
+
   function openCustomerFromLead(customerId: number) {
     setCustomerSelectedId(customerId);
     setCustomerHighlightedId(customerId);
     navigateToView("customers");
   }
 
+  function openCalendarSource(source: CalendarSourceNavigation) {
+    const type = source.entityType.trim().toLowerCase();
+    if (type === "customer" && source.entityId) {
+      setCustomerSelectedId(source.entityId);
+      setCustomerHighlightedId(source.entityId);
+      navigateToView("customers");
+      return;
+    }
+
+    if (type === "prospect") {
+      const prospect = (prospects.data ?? []).find((row) => row.id === source.entityId);
+      setProspectViewState((current) => ({
+        ...current,
+        searchText: prospect?.prospectId ?? source.title.replace(/^Review:\s*/i, ""),
+        searchDetails: true
+      }));
+      navigateToView("prospects");
+    }
+  }
+
   function returnFromAiCompanyInsight() {
+    if (aiInsightContext?.sourceView === "leads") {
+      navigateToView(aiInsightContext.leadId ? `lead:${aiInsightContext.leadId}` : "leads");
+      return;
+    }
+
     if (!aiInsightContext?.customerId) {
       navigateToView("customers");
       return;
@@ -1264,6 +1648,7 @@ function App() {
       { id: "prospects", label: "Prospects", icon: Users },
       { id: "customers", label: "Customers", icon: Building2 },
       { id: "leads", label: "Leads", icon: BadgeCheck },
+      { id: "calendar", label: "Calendar", icon: Calendar },
       { id: "campaigns", label: "Campaigns", icon: Megaphone },
       { id: "geography", label: "Geography", icon: MapPinned },
       { id: "ai-company-insight", label: "AI Company Insight", icon: CircleHelp },
@@ -1275,6 +1660,9 @@ function App() {
     () => [
       { id: "customer-test", label: "Customer Import", icon: SearchCheck },
       { id: "prospect-test", label: "Prospect Import", icon: Users },
+      { id: "database-backup", label: "Database Backup", icon: Database },
+      { id: "system-calendar", label: "System Calendar", icon: Calendar },
+      { id: "paymentsense-reset", label: "Paymentsense Reset", icon: SearchCheck },
       { id: "regions", label: "Region Maintenance", icon: MapPinned },
       { id: "business-types", label: "Business Types", icon: Building2 },
       { id: "customer-value-types", label: "Customer Value Type", icon: BadgeCheck },
@@ -1282,6 +1670,8 @@ function App() {
       { id: "jobs", label: "Jobs", icon: Activity },
       { id: "customer-activity-statuses", label: "Customer Activity Status", icon: Activity },
       { id: "lead-statuses", label: "Lead Status", icon: BadgeCheck },
+      { id: "response-statuses", label: "Response Status", icon: MessageSquare },
+      { id: "calendar-entry-types", label: "Calendar Entry Types", icon: Calendar },
       { id: "region-assignment", label: "Region Assignment", icon: MapPinned },
       { id: "customer-dedupe", label: "Customer Dedupe", icon: GitCompareArrows },
       { id: "users", label: "Users", icon: Users },
@@ -1295,6 +1685,8 @@ function App() {
   const views = useMemo(() => [...primaryViews, ...operationsViews], [operationsViews, primaryViews]);
   const activeTitle = activeView.startsWith("lead:")
     ? "Lead"
+    : activeView === "quotes"
+      ? "Quotes"
     : views.find((view) => view.id === activeView)?.label;
 
   return (
@@ -1344,6 +1736,18 @@ function App() {
                         </button>
                       </div>
                     ))}
+                  </div>
+                ) : null}
+                {view.id === "leads" ? (
+                  <div className="nav-sublist">
+                    <button
+                      className={activeView === "quotes" ? "nav-item nav-subitem active" : "nav-item nav-subitem"}
+                      onClick={() => navigateToView("quotes")}
+                      type="button"
+                    >
+                      <FileText size={18} aria-hidden />
+                      <span>Quotes</span>
+                    </button>
                   </div>
                 ) : null}
               </Fragment>
@@ -1419,6 +1823,7 @@ function App() {
             users={users.data ?? []}
             customerActivityStatuses={customerActivityStatuses.data ?? []}
             customerValueTypes={customerValueTypes.data ?? []}
+            calendarEntryTypes={calendarEntryTypes.data ?? []}
             leadStatuses={leadStatuses.data ?? []}
             currentUser={currentUser}
             currentUserId={currentUserId}
@@ -1428,6 +1833,7 @@ function App() {
             onOpenLead={(leadId) => navigateToView(`lead:${leadId}`)}
             onOpenAiCompanyInsight={openAiCompanyInsightForCustomer}
             onDataChanged={refreshData}
+            dataChangeNotice={dataChangeNotice.totalCount > 0 ? dataChangeNotice : null}
             selectedCustomerId={dashboardSelectedCustomerId}
             onSelectedCustomerIdChange={setDashboardSelectedCustomerId}
           />
@@ -1500,12 +1906,40 @@ function App() {
             onDataChanged={refreshData}
           />
         )}
+        {activeView === "response-statuses" && (
+          <ResponseStatusesView
+            state={responseStatuses}
+            form={responseStatusForm}
+            onFormChange={setResponseStatusForm}
+            onDataChanged={refreshData}
+          />
+        )}
+        {activeView === "calendar-entry-types" && (
+          <CalendarEntryTypesView
+            state={calendarEntryTypes}
+            form={calendarEntryTypeForm}
+            onFormChange={setCalendarEntryTypeForm}
+            onDataChanged={refreshData}
+          />
+        )}
         {activeView === "ai-settings" && (
           <AiSettingsView
             form={geminiSettingsForm}
             onFormChange={setGeminiSettingsForm}
           />
         )}
+        {activeView === "database-backup" && <DatabaseBackupView />}
+        {activeView === "system-calendar" && (
+          <CalendarView
+            scope="system"
+            users={users.data ?? []}
+            entryTypes={calendarEntryTypes.data ?? []}
+            campaigns={campaigns.data ?? []}
+            currentUserId={currentUserId}
+            onOpenSource={openCalendarSource}
+          />
+        )}
+        {activeView === "paymentsense-reset" && <PaymentsenseResetView />}
         {activeView === "jobs" && <JobsView />}
         {activeView === "search-runs" && <SearchRunsView state={searchRuns} />}
         {activeView === "ai-company-insight" && (
@@ -1520,7 +1954,11 @@ function App() {
         {activeView === "prospects" && (
           <ProspectsView
             state={prospects}
+            calendarEntryTypes={calendarEntryTypes.data ?? []}
+            users={users.data ?? []}
+            currentUserId={currentUserId}
             onDataChanged={refreshData}
+            dataChangeNotice={prospectDataChangeNotice}
             viewState={prospectViewState}
             onViewStateChange={setProspectViewState}
           />
@@ -1528,18 +1966,22 @@ function App() {
         {activeView === "customers" && (
           <CustomersView
             state={customers}
+            campaigns={campaigns.data ?? []}
             regions={regions.data ?? []}
             customerActivityStatuses={customerActivityStatuses.data ?? []}
             customerValueTypes={customerValueTypes.data ?? []}
+            businessTypes={businessTypes.data ?? []}
             users={users.data ?? []}
             currentUser={currentUser}
             currentUserId={currentUserId}
+            calendarEntryTypes={calendarEntryTypes.data ?? []}
             viewState={customerViewState}
             onViewStateChange={setCustomerViewState}
             onOpenProspectTest={openProspectTestFromCustomerFilter}
             onOpenLead={(leadId) => navigateToView(`lead:${leadId}`)}
             onOpenAiCompanyInsight={openAiCompanyInsightForCustomer}
             onDataChanged={refreshData}
+            dataChangeNotice={customerDataChangeNotice}
             selectedCustomerId={customerSelectedId}
             highlightedCustomerId={customerHighlightedId}
             onHighlightedCustomerIdChange={setCustomerHighlightedId}
@@ -1549,18 +1991,22 @@ function App() {
         {activeView === "customer-dedupe" && (
           <CustomersView
             state={customers}
+            campaigns={[]}
             regions={regions.data ?? []}
             customerActivityStatuses={customerActivityStatuses.data ?? []}
             customerValueTypes={customerValueTypes.data ?? []}
+            businessTypes={businessTypes.data ?? []}
             users={users.data ?? []}
             currentUser={currentUser}
             currentUserId={currentUserId}
+            calendarEntryTypes={calendarEntryTypes.data ?? []}
             viewState={customerDedupeViewState}
             onViewStateChange={setCustomerDedupeViewState}
             onOpenProspectTest={openProspectTestFromCustomerFilter}
             onOpenLead={(leadId) => navigateToView(`lead:${leadId}`)}
             onOpenAiCompanyInsight={openAiCompanyInsightForCustomer}
             onDataChanged={refreshData}
+            dataChangeNotice={customerDataChangeNotice}
             selectedCustomerId={customerSelectedId}
             highlightedCustomerId={customerHighlightedId}
             onHighlightedCustomerIdChange={setCustomerHighlightedId}
@@ -1581,6 +2027,7 @@ function App() {
           <CustomerCleanseView
             state={customers}
             regions={regions.data ?? []}
+            users={users.data ?? []}
             viewState={customerCleanseViewState}
             onViewStateChange={setCustomerCleanseViewState}
             onDataChanged={refreshData}
@@ -1603,12 +2050,31 @@ function App() {
             leadStatuses={leadStatuses.data ?? []}
             onOpenLead={(leadId) => navigateToView(`lead:${leadId}`)}
             onRemoveLead={() => refreshData()}
+            onDataChanged={refreshData}
+            dataChangeNotice={leadDataChangeNotice}
             viewState={leadViewState}
             onViewStateChange={setLeadViewState}
             onOpenSelectedLeadsMap={(leadRows) => {
               setCustomerMapLeadRequest(leadRows);
               navigateToView("geography");
             }}
+          />
+        )}
+        {activeView === "calendar" && (
+          <CalendarView
+            scope="user"
+            users={users.data ?? []}
+            entryTypes={calendarEntryTypes.data ?? []}
+            campaigns={campaigns.data ?? []}
+            currentUserId={currentUserId}
+            onOpenSource={openCalendarSource}
+          />
+        )}
+        {activeView === "quotes" && (
+          <QuotesView
+            state={salesQuotes}
+            onDataChanged={refreshData}
+            onOpenJobs={() => navigateToView("jobs")}
           />
         )}
         {activeView.startsWith("lead:") && (
@@ -1619,8 +2085,10 @@ function App() {
             onLeadChanged={refreshData}
             users={users.data ?? []}
             leadStatuses={leadStatuses.data ?? []}
+            responseStatuses={responseStatuses.data ?? []}
             customerValueTypes={customerValueTypes.data ?? []}
             defaultUserId={currentUserId}
+            onOpenAiCompanyInsight={openAiCompanyInsightForLead}
           />
         )}
         {activeView === "campaigns" && (
@@ -1628,7 +2096,9 @@ function App() {
             state={campaigns}
             form={campaignForm}
             onFormChange={setCampaignForm}
+            users={users.data ?? []}
             leadStatuses={leadStatuses.data ?? []}
+            responseStatuses={responseStatuses.data ?? []}
             onDataChanged={refreshData}
           />
         )}
@@ -2545,12 +3015,43 @@ function ProspectSearchResults({
   onChange: Dispatch<SetStateAction<ProspectTestState>>;
 }) {
   const [filterText, setFilterText] = useState("");
+  const [removedProspectIds, setRemovedProspectIds] = useState<Set<string>>(() => new Set());
+  const [selectedImportProspectIds, setSelectedImportProspectIds] = useState<Set<string>>(() => new Set());
+  const [bulkImportState, setBulkImportState] = useState<{
+    running: boolean;
+    completed: number;
+    total: number;
+    successCount: number;
+    failedCount: number;
+    currentProspectId?: string;
+  }>({
+    running: false,
+    completed: 0,
+    total: 0,
+    successCount: 0,
+    failedCount: 0
+  });
+  const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+
+  useEffect(() => {
+    setRemovedProspectIds(new Set());
+    setSelectedImportProspectIds(new Set());
+    setBulkImportState({
+      running: false,
+      completed: 0,
+      total: 0,
+      successCount: 0,
+      failedCount: 0
+    });
+    setNotice(null);
+  }, [preview.query, preview.searchUrl]);
 
   if (!preview.rows.length) {
     return <EmptyPanel message={`No prospect rows found for "${preview.query}" ${mode === "live" ? "from the live site" : "in stored data"}.`} />;
   }
 
-  const filteredRows = preview.rows.filter((row) => {
+  const remainingRows = preview.rows.filter((row) => !removedProspectIds.has(row.prospectId));
+  const filteredRows = remainingRows.filter((row) => {
     const query = filterText.trim().toLowerCase();
     if (!query) return true;
 
@@ -2562,8 +3063,37 @@ function ProspectSearchResults({
   const sortedRows = [...filteredRows].sort((left, right) =>
     compareValues(getProspectTestSortValue(left, sortKey), getProspectTestSortValue(right, sortKey), sortDirection)
   );
+  const bulkImportTargets = remainingRows;
+  const allVisibleSelected = sortedRows.length > 0 && sortedRows.every((row) => selectedImportProspectIds.has(row.prospectId));
 
-  async function insertRow(row: ProspectSearchRow) {
+  function markRowsImportedWithDetails(prospectIds: Set<string>, detailsByProspectId: Map<string, ProspectDetail>) {
+    onChange((current) => ({
+      ...current,
+      state: current.state.data
+        ? {
+            data: {
+              ...current.state.data,
+              rows: current.state.data.rows.map((currentRow) => {
+                if (!prospectIds.has(currentRow.prospectId)) {
+                  return currentRow;
+                }
+
+                const detail = detailsByProspectId.get(currentRow.prospectId);
+                return {
+                  ...currentRow,
+                  added: true,
+                  hasStoredDetail: true,
+                  postcode: detail?.address?.postcode ?? currentRow.postcode
+                };
+              })
+            },
+            loading: false
+          }
+        : current.state
+    }));
+  }
+
+  async function insertRow(row: ProspectSearchRow, shouldRefresh = true) {
     const cachedDetail =
       selectedProspectId === row.prospectId && detailState.data?.prospectId === row.prospectId
         ? detailState.data
@@ -2594,6 +3124,12 @@ function ProspectSearchResults({
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
+    setRemovedProspectIds((current) => {
+      if (!current.has(row.prospectId)) return current;
+      const next = new Set(current);
+      next.delete(row.prospectId);
+      return next;
+    });
     onChange((current) => ({
       ...current,
       state: current.state.data
@@ -2605,10 +3141,12 @@ function ProspectSearchResults({
               )
             },
             loading: false
-          }
+        }
         : current.state
     }));
-    onDataChanged();
+    if (shouldRefresh) {
+      onDataChanged();
+    }
   }
 
   async function removeRow(row: ProspectSearchRow) {
@@ -2627,6 +3165,7 @@ function ProspectSearchResults({
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
+    setRemovedProspectIds((current) => new Set(current).add(row.prospectId));
     onChange((current) => ({
       ...current,
       state: current.state.data
@@ -2646,6 +3185,125 @@ function ProspectSearchResults({
     onDataChanged();
   }
 
+  async function importRemainingWithDetails() {
+    const targets = [...bulkImportTargets];
+    if (!targets.length) {
+      setNotice({ kind: "error", message: "No remaining prospect rows to import." });
+      return;
+    }
+
+    setNotice(null);
+    setBulkImportState({
+      running: true,
+      completed: 0,
+      total: targets.length,
+      successCount: 0,
+      failedCount: 0
+    });
+
+    let successCount = 0;
+    let failedCount = 0;
+    const successfulProspectIds = new Set<string>();
+    const detailsByProspectId = new Map<string, ProspectDetail>();
+
+    for (const row of targets) {
+      setBulkImportState((current) => ({
+        ...current,
+        currentProspectId: row.prospectId
+      }));
+
+      try {
+        if (!row.added) {
+          await insertRow(row, false);
+        }
+
+        const detailResponse = await fetchWithActor(`${apiBase}/api/test/prospect-detail/${encodeURIComponent(row.prospectId)}`);
+        if (!detailResponse.ok) {
+          throw new Error(`HTTP ${detailResponse.status}`);
+        }
+
+        const detail = (await detailResponse.json()) as ProspectDetail;
+        detailsByProspectId.set(row.prospectId, detail);
+        successfulProspectIds.add(row.prospectId);
+        successCount += 1;
+      } catch {
+        failedCount += 1;
+      }
+
+      setBulkImportState((current) => ({
+        ...current,
+        completed: current.completed + 1,
+        successCount,
+        failedCount
+      }));
+    }
+
+    if (successfulProspectIds.size > 0) {
+      markRowsImportedWithDetails(successfulProspectIds, detailsByProspectId);
+      onDataChanged();
+    }
+
+    setBulkImportState({
+      running: false,
+      completed: targets.length,
+      total: targets.length,
+      successCount,
+      failedCount
+    });
+    setNotice({
+      kind: failedCount ? "error" : "success",
+      message: failedCount
+        ? `Imported details for ${successCount} prospect rows, ${failedCount} failed.`
+        : `Imported ${successCount} prospect rows with details.`
+    });
+  }
+
+  function toggleImportRowSelection(prospectId: string, checked: boolean) {
+    setSelectedImportProspectIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(prospectId);
+      } else {
+        next.delete(prospectId);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllVisibleImportRows(checked: boolean) {
+    setSelectedImportProspectIds((current) => {
+      const next = new Set(current);
+      for (const row of sortedRows) {
+        if (checked) {
+          next.add(row.prospectId);
+        } else {
+          next.delete(row.prospectId);
+        }
+      }
+      return next;
+    });
+  }
+
+  function deleteSelectedImportRows() {
+    if (!selectedImportProspectIds.size) {
+      setNotice({ kind: "error", message: "No prospect rows selected to delete." });
+      return;
+    }
+
+    const selectedIds = new Set(selectedImportProspectIds);
+    setRemovedProspectIds((current) => new Set([...current, ...selectedIds]));
+    setSelectedImportProspectIds(new Set());
+    onChange((current) => ({
+      ...current,
+      detail: selectedIds.has(current.selectedProspectId) ? { loading: false } : current.detail,
+      selectedProspectId: selectedIds.has(current.selectedProspectId) ? "" : current.selectedProspectId
+    }));
+    setNotice({
+      kind: "success",
+      message: `Deleted ${selectedIds.size} selected prospect row${selectedIds.size === 1 ? "" : "s"} from this import result.`
+    });
+  }
+
   return (
     <section className="table-wrap">
       <div className="table-caption">
@@ -2653,6 +3311,30 @@ function ProspectSearchResults({
         <span> {mode === "live" ? "live Paymentsense" : "cached"} prospect row{preview.rows.length === 1 ? "" : "s"}</span>
         {filterText.trim() && <span className="filter-note"> filtered from {preview.rows.length}</span>}
       </div>
+      <div className="page-actions">
+        <button
+          className="page-action-button"
+          type="button"
+          disabled={bulkImportState.running || !bulkImportTargets.length}
+          onClick={() => void importRemainingWithDetails()}
+        >
+          {bulkImportState.running ? "Importing Details..." : "Import Remaining With Details"}
+        </button>
+        <button
+          className="secondary-action"
+          type="button"
+          disabled={bulkImportState.running || !selectedImportProspectIds.size}
+          onClick={deleteSelectedImportRows}
+        >
+          Delete Selected
+        </button>
+        <span className="page-action-note">
+          {bulkImportState.running
+            ? `${bulkImportState.completed} of ${bulkImportState.total}${bulkImportState.currentProspectId ? ` (${bulkImportState.currentProspectId})` : ""}`
+            : `${bulkImportTargets.length} remaining row${bulkImportTargets.length === 1 ? "" : "s"} / ${selectedImportProspectIds.size} selected`}
+        </span>
+      </div>
+      {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
       <div className="table-caption">
         <div className="table-search table-search-inline">
           <label htmlFor="prospect-import-filter">Filter returned rows</label>
@@ -2668,6 +3350,16 @@ function ProspectSearchResults({
       <table>
         <thead>
           <tr>
+            <th>
+              <label className="header-filter">
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={(event) => toggleAllVisibleImportRows(event.target.checked)}
+                />
+                <span>Select</span>
+              </label>
+            </th>
             <th>DB</th>
             <th>Action</th>
             <th>{renderSortHeader("Prospect ID", sortKey === "prospectId", sortDirection, () => onSort("prospectId"))}</th>
@@ -2685,6 +3377,15 @@ function ProspectSearchResults({
               <tr
                 className={getProspectTestRowClassName(row, selectedProspectId, customerContext)}
               >
+                <td>
+                  <input
+                    className="row-select-checkbox"
+                    type="checkbox"
+                    checked={selectedImportProspectIds.has(row.prospectId)}
+                    onChange={(event) => toggleImportRowSelection(row.prospectId, event.target.checked)}
+                    aria-label={`Select ${row.prospectId}`}
+                  />
+                </td>
                 <td>
                   <button
                     className="details-button"
@@ -2722,7 +3423,7 @@ function ProspectSearchResults({
               </tr>
               {row.prospectId === selectedProspectId && (
                 <InlineProspectDetailRow
-                  colspan={9}
+                  colspan={10}
                   detailState={detailState}
                   customerContext={customerContext}
                   usingCurrentProspect={usingCurrentProspect}
@@ -2742,15 +3443,25 @@ function ProspectDetailPanel({
   inline = false,
   customerContext = null,
   usingCurrentProspect = false,
-  onUseCurrentProspect
+  onUseCurrentProspect,
+  calendarEntryTypes = [],
+  users = [],
+  currentUserId = "",
+  reviewEntityId
 }: {
   detail: ProspectDetail;
   inline?: boolean;
   customerContext?: ProspectTestCustomerContext | null;
   usingCurrentProspect?: boolean;
   onUseCurrentProspect?: () => void;
+  calendarEntryTypes?: CalendarEntryType[];
+  users?: User[];
+  currentUserId?: string;
+  reviewEntityId?: number;
 }) {
   const canUseCurrentProspect = Boolean(customerContext && onUseCurrentProspect);
+  const canScheduleReview = Boolean(currentUserId);
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
 
   return (
     <section className={inline ? "detail-panel inline" : "detail-panel"}>
@@ -2772,11 +3483,17 @@ function ProspectDetailPanel({
               {usingCurrentProspect ? "Using..." : "Use this prospect"}
             </button>
           )}
+          {canScheduleReview ? (
+            <button className="secondary-action" type="button" onClick={() => setReviewModalOpen(true)}>
+              Schedule Review
+            </button>
+          ) : null}
         </div>
       </div>
 
       <div className="detail-grid">
         <DetailItem label="Channel" value={detail.channel} />
+        <DetailItem label="Source" value={detail.salesUrl ? <a className="row-link" href={detail.salesUrl} target="_blank" rel="noreferrer">{detail.salesUrl}</a> : detail.origin} />
         <DetailItem label="Origin" value={detail.origin} />
         <DetailItem label="Created" value={detail.createdOn} />
         <DetailItem label="Owner" value={detail.ownerName} />
@@ -2786,6 +3503,20 @@ function ProspectDetailPanel({
         <DetailItem label="Email" value={<CopyableEmail email={detail.contact.email} />} />
         <DetailItem label="Address" value={formatProspectAddress(detail)} />
       </div>
+      {reviewModalOpen ? (
+        <ReviewScheduleModal
+          target={{
+            entityType: "prospect",
+            entityId: reviewEntityId,
+            label: detail.businessName,
+            reference: detail.prospectId
+          }}
+          calendarEntryTypes={calendarEntryTypes}
+          users={users}
+          currentUserId={currentUserId}
+          onClose={() => setReviewModalOpen(false)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -2795,6 +3526,179 @@ function DetailItem({ label, value }: { label: string; value?: ReactNode | strin
     <div className="detail-item">
       <span>{label}</span>
       <strong>{value ?? ""}</strong>
+    </div>
+  );
+}
+
+function ReviewScheduleModal({
+  target,
+  calendarEntryTypes,
+  users,
+  currentUserId,
+  onClose
+}: {
+  target: ReviewScheduleTarget;
+  calendarEntryTypes: CalendarEntryType[];
+  users: User[];
+  currentUserId: string;
+  onClose: () => void;
+}) {
+  const reviewType = calendarEntryTypes.find((type) => type.label.trim().toLowerCase() === "review" && type.isActive);
+  const calendarUsers = users.filter((user) => user.userType !== "Telesale");
+  const [reviewDate, setReviewDate] = useState(() => toDateInput(addDays(new Date(), 7)));
+  const [reviewTime, setReviewTime] = useState("09:00");
+  const [priority, setPriority] = useState<LeadPriority>("medium");
+  const [notes, setNotes] = useState("");
+  const [selectedUserIds, setSelectedUserIds] = useState<Record<number, boolean>>(() => {
+    const currentId = Number(currentUserId);
+    return Number.isFinite(currentId) && currentId > 0 ? { [currentId]: true } : {};
+  });
+  const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+  const [saving, setSaving] = useState(false);
+  const ownerUserIds = Object.entries(selectedUserIds)
+    .filter(([, selected]) => selected)
+    .map(([id]) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  const canSave = Boolean(reviewType) && ownerUserIds.length > 0 && Boolean(reviewDate) && Boolean(reviewTime);
+
+  function applyShortcut(value: string) {
+    const now = new Date();
+    let next = new Date(now);
+    if (value.endsWith("d")) {
+      next = addDays(now, Number(value.replace("d", "")));
+    } else if (value.endsWith("w")) {
+      next = addDays(now, Number(value.replace("w", "")) * 7);
+    } else if (value.endsWith("m")) {
+      next = addMonths(now, Number(value.replace("m", "")));
+    } else if (value === "1y") {
+      next = addMonths(now, 12);
+    }
+    setReviewDate(toDateInput(next));
+  }
+
+  async function scheduleReview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canSave || !reviewType) return;
+
+    setSaving(true);
+    setNotice(null);
+    const startsAt = `${reviewDate}T${reviewTime}`;
+    const endsAt = toDateTimeLocalInput(addMinutes(new Date(startsAt), 30));
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/calendar-entries`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          calendarEntryTypeId: reviewType.id,
+          title: `Review: ${target.label}`,
+          description: notes.trim() || null,
+          scope: "user",
+          priority,
+          startsAt,
+          endsAt,
+          ownerUserIds,
+          sourceEntityType: target.entityType,
+          sourceEntityId: target.entityId ?? null,
+          metadata: { reviewTarget: target }
+        })
+      }, currentUserId);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      setNotice({ kind: "success", message: "Review scheduled." });
+      window.setTimeout(onClose, 500);
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Could not schedule review." });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel review-schedule-modal" aria-modal="true" aria-labelledby="review-schedule-title" role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">{target.entityType === "customer" ? "Customer Review" : "Prospect Review"}</p>
+            <h3 id="review-schedule-title">Schedule Review</h3>
+          </div>
+          <button className="modal-close" type="button" onClick={onClose}>Close</button>
+        </div>
+        <form className="review-schedule-form" onSubmit={(event) => void scheduleReview(event)}>
+          <div className="review-schedule-summary">
+            <span className="eyebrow">Entry</span>
+            <strong>Review: {target.label}</strong>
+            {target.reference ? <span className="muted">{target.reference}</span> : null}
+          </div>
+          {!reviewType ? <StatusBanner kind="error" message="The Review calendar entry type is not available." /> : null}
+          {notice ? <StatusBanner kind={notice.kind} message={notice.message} /> : null}
+          <div className="review-schedule-grid">
+            <div className="table-search">
+              <label htmlFor="review-shortcut">Review in</label>
+              <select id="review-shortcut" className="header-select" defaultValue="1d" onChange={(event) => applyShortcut(event.target.value)}>
+                {[1, 2, 3, 4, 5, 6].map((day) => (
+                  <option key={`${day}d`} value={`${day}d`}>{day} day{day === 1 ? "" : "s"}</option>
+                ))}
+                {[1, 2, 3, 4, 5, 6].map((week) => (
+                  <option key={`${week}w`} value={`${week}w`}>{week} week{week === 1 ? "" : "s"}</option>
+                ))}
+                {[1, 2, 3, 4, 5, 6].map((month) => (
+                  <option key={`${month}m`} value={`${month}m`}>{month} month{month === 1 ? "" : "s"}</option>
+                ))}
+                <option value="1y">1 year</option>
+              </select>
+            </div>
+            <div className="table-search">
+              <label htmlFor="review-date">Date</label>
+              <input id="review-date" type="date" value={reviewDate} onChange={(event) => setReviewDate(event.target.value)} required />
+            </div>
+            <div className="table-search">
+              <label htmlFor="review-time">Time</label>
+              <input id="review-time" type="time" value={reviewTime} onChange={(event) => setReviewTime(event.target.value)} required />
+            </div>
+            <div className="table-search">
+              <label htmlFor="review-priority">Priority</label>
+              <select id="review-priority" className="header-select" value={priority} onChange={(event) => setPriority(event.target.value as LeadPriority)}>
+                <option value="very_low">Very low</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </div>
+          </div>
+          <section className="review-user-section">
+            <span className="table-search-label">Users</span>
+            <div className="calendar-user-picker compact">
+              {calendarUsers.map((user) => (
+                <label key={user.id}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(selectedUserIds[user.id])}
+                    onChange={(event) =>
+                      setSelectedUserIds((current) => ({ ...current, [user.id]: event.target.checked }))
+                    }
+                  />
+                  <span>{user.fullName}</span>
+                </label>
+              ))}
+            </div>
+          </section>
+          <div className="table-search">
+            <label htmlFor="review-notes">Notes</label>
+            <textarea id="review-notes" rows={4} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Review notes" />
+          </div>
+          <div className="modal-actions">
+            {ownerUserIds.length === 0 ? <span className="page-action-note">Select at least one user.</span> : null}
+            <button className="secondary-action" type="button" onClick={onClose}>Cancel</button>
+            <button className="page-action-button" type="submit" disabled={saving || !canSave}>
+              {saving ? "Scheduling..." : "Schedule Review"}
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   );
 }
@@ -2831,6 +3735,80 @@ function CopyableEmail({ email }: { email?: string | null }) {
       {safeEmail}
     </button>
   );
+}
+
+function formatUkPhoneNumber(phone?: string | null) {
+  const value = phone?.trim();
+  if (!value) {
+    return "";
+  }
+
+  const hasPlus = value.startsWith("+");
+  const digits = value.replace(/\D/g, "");
+  let national = digits;
+  if (digits.startsWith("44") && digits.length > 10) {
+    national = `0${digits.slice(2)}`;
+  } else if (!digits.startsWith("0") && digits.length === 10 && !hasPlus) {
+    national = `0${digits}`;
+  }
+
+  if (national.length === 11 && national.startsWith("07")) {
+    return `${national.slice(0, 5)} ${national.slice(5, 8)} ${national.slice(8)}`;
+  }
+  if (national.length === 11 && (national.startsWith("01") || national.startsWith("02"))) {
+    return `${national.slice(0, 5)} ${national.slice(5, 8)} ${national.slice(8)}`;
+  }
+  if (national.length === 10 && national.startsWith("0")) {
+    return `${national.slice(0, 4)} ${national.slice(4, 7)} ${national.slice(7)}`;
+  }
+
+  return value;
+}
+
+function renderLeadCampaigns(memberships: LeadCampaignMembership[]) {
+  const campaigns = Array.from(new Map(memberships.map((row) => [row.campaignId, row.campaignName])).values());
+  if (!campaigns.length) {
+    return "";
+  }
+
+  return (
+    <div className="lead-membership-list">
+      {campaigns.map((campaign) => (
+        <span className="lead-membership-chip" key={campaign} title={campaign}>{campaign}</span>
+      ))}
+    </div>
+  );
+}
+
+function renderLeadWaves(memberships: LeadCampaignMembership[]) {
+  if (!memberships.length) {
+    return "";
+  }
+
+  return (
+    <div className="lead-membership-list">
+      {memberships.map((membership) => {
+        const label = `${membership.campaignName} - ${membership.waveNumber}. ${membership.waveName}`;
+        return (
+          <span className="lead-membership-chip" key={`${membership.campaignId}:${membership.waveId}`} title={label}>
+            {`${membership.waveNumber}. ${membership.waveName}`}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function getLeadSourceLabel(lead: Pick<Lead, "sourceType" | "createdFromQuote">) {
+  if (lead.sourceType === "quote" || lead.createdFromQuote) {
+    return "Quote";
+  }
+
+  if (lead.sourceType === "prospect") {
+    return "Prospect";
+  }
+
+  return "Customer";
 }
 
 async function copyTextToClipboard(value: string | null | undefined) {
@@ -2909,6 +3887,7 @@ function DashboardView({
   users,
   customerActivityStatuses,
   customerValueTypes,
+  calendarEntryTypes,
   leadStatuses,
   currentUser,
   currentUserId,
@@ -2918,6 +3897,7 @@ function DashboardView({
   onOpenLead,
   onOpenAiCompanyInsight,
   onDataChanged,
+  dataChangeNotice,
   selectedCustomerId,
   onSelectedCustomerIdChange
 }: {
@@ -2929,6 +3909,7 @@ function DashboardView({
   users: User[];
   customerActivityStatuses: CustomerActivityStatusOption[];
   customerValueTypes: CustomerValueType[];
+  calendarEntryTypes: CalendarEntryType[];
   leadStatuses: LeadStatusOption[];
   currentUser: User | null;
   currentUserId: string;
@@ -2942,6 +3923,7 @@ function DashboardView({
   onOpenLead: (leadId: number) => void;
   onOpenAiCompanyInsight: (customer: Pick<Customer, "id" | "entityName" | "tradingName" | "postcode" | "hasAiInsightJobScheduled">) => void;
   onDataChanged: () => void;
+  dataChangeNotice: DataChangeNotice | null;
   selectedCustomerId: number | null;
   onSelectedCustomerIdChange: Dispatch<SetStateAction<number | null>>;
 }) {
@@ -3089,7 +4071,8 @@ function DashboardView({
         lead.contactPhone,
         lead.contactEmail,
         lead.postcode,
-        lead.leadStatus
+        lead.leadStatus,
+        lead.responseStatus
       ]
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(query));
@@ -3605,7 +4588,13 @@ function DashboardView({
         ) : (
           <div className="page-action-note">Showing dashboard for all users</div>
         )}
+        <button className="secondary-action" type="button" onClick={onDataChanged}>
+          Refresh Dashboard
+        </button>
       </section>
+      {dataChangeNotice ? (
+        <DataChangeBanner notice={dataChangeNotice} scope="dashboard" onRefresh={onDataChanged} />
+      ) : null}
       <section className="metric-grid">
         {tiles.map(([label, value]) => (
           <div className="metric-tile" key={label}>
@@ -3835,6 +4824,9 @@ function DashboardView({
                       customerId={row.id}
                       customer={row}
                       customerValueTypes={customerValueTypes}
+                      calendarEntryTypes={calendarEntryTypes}
+                      users={users}
+                      currentUserId={currentUserId}
                       notesRefreshKey={customerNotesRefreshKeys[row.id] ?? 0}
                       onCustomerValueChanged={(customerId, next) =>
                         setCustomerValueTypeOverrides((current) => ({ ...current, [customerId]: next }))
@@ -3989,6 +4981,192 @@ function AiSettingsView({
             </div>
           </form>
         )}
+      </section>
+    </div>
+  );
+}
+
+function PaymentsenseResetView() {
+  const [running, setRunning] = useState<"reset" | "test" | null>(null);
+  const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+  const [lastResult, setLastResult] = useState<PaymentsenseAuthOperation | null>(null);
+
+  async function runOperation(kind: "reset" | "test") {
+    setRunning(kind);
+    setNotice(null);
+    setLastResult(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/operations/paymentsense-auth/${kind}`, {
+        method: "POST"
+      });
+      const payload = await response.json().catch(() => null) as (PaymentsenseAuthOperation & { detail?: string; result?: PaymentsenseAuthOperation }) | null;
+      const result = payload?.result ?? (payload && "success" in payload ? payload : null);
+
+      if (!response.ok || !result?.success) {
+        setLastResult(result);
+        throw new Error(result?.errorText ?? payload?.detail ?? `HTTP ${response.status}`);
+      }
+
+      setLastResult(result);
+      setNotice({
+        kind: "success",
+        message: kind === "reset" ? "Paymentsense authentication saved." : "Paymentsense authentication verified."
+      });
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Paymentsense operation failed."
+      });
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  return (
+    <div className="test-page">
+      <section className="detail-panel">
+        <div className="detail-header">
+          <div>
+            <span className="eyebrow">Operations</span>
+            <h3>Paymentsense Reset</h3>
+            <p>Refresh and verify the saved Paymentsense browser session.</p>
+          </div>
+        </div>
+        {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
+        <div className="url-preview">
+          <span>Docker note</span>
+          <code>Run Auth needs a visible browser. If the API is running in Docker, run npm run auth:paymentsense from PowerShell, then use Test Auth here.</code>
+        </div>
+        <div className="page-actions">
+          <button
+            className="page-action-button"
+            type="button"
+            disabled={Boolean(running)}
+            onClick={() => void runOperation("reset")}
+          >
+            {running === "reset" ? "Running Auth..." : "Run Auth"}
+          </button>
+          <button
+            className="secondary-action"
+            type="button"
+            disabled={Boolean(running)}
+            onClick={() => void runOperation("test")}
+          >
+            {running === "test" ? "Testing..." : "Test Auth"}
+          </button>
+        </div>
+        {running === "reset" && (
+          <StatusBanner kind="success" message="Complete the sign-in flow in the browser window opened by Playwright." />
+        )}
+        {lastResult && (
+          <div className="jobs-json-grid paymentsense-reset-output">
+            <div>
+              <h4>Result</h4>
+              <div className="jobs-overview-grid">
+                <div className="detail-item"><span>Command</span><strong>{lastResult.command}</strong></div>
+                <div className="detail-item"><span>Exit code</span><strong>{lastResult.exitCode}</strong></div>
+                <div className="detail-item"><span>Auth file</span><strong className="mono">{lastResult.authPath}</strong></div>
+              </div>
+            </div>
+            <div>
+              <h4>Output</h4>
+              <pre className="jobs-json-block">{lastResult.outputText || lastResult.errorOutputText || "No output."}</pre>
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function DatabaseBackupView() {
+  const [running, setRunning] = useState<"full" | "data" | null>(null);
+  const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+
+  async function runBackup(mode: "full" | "data") {
+    setRunning(mode);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/operations/database-backup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode })
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: string; error?: string } | null;
+        throw new Error(payload?.error ?? payload?.detail ?? `HTTP ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const fileName = readDownloadFileName(response.headers.get("content-disposition")) ??
+        `matchlab-${mode === "full" ? "full" : "data-only"}-${new Date().toISOString().replace(/[:.]/g, "-")}.sql`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setNotice({
+        kind: "success",
+        message: mode === "full" ? "Full database backup downloaded." : "Data-only database backup downloaded."
+      });
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Database backup failed."
+      });
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  return (
+    <div className="test-page">
+      <section className="detail-panel">
+        <div className="detail-header">
+          <div>
+            <span className="eyebrow">Operations</span>
+            <h3>Database Backup</h3>
+            <p>Create plain SQL backups for safekeeping. This does not restore, change, delete, or write database data.</p>
+          </div>
+        </div>
+        {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
+        <div className="jobs-overview-grid">
+          <div className="detail-item">
+            <span>Full backup</span>
+            <strong>Structure and data</strong>
+          </div>
+          <div className="detail-item">
+            <span>Data backup</span>
+            <strong>Data only</strong>
+          </div>
+        </div>
+        <div className="page-actions">
+          <button
+            className="page-action-button"
+            type="button"
+            disabled={Boolean(running)}
+            onClick={() => void runBackup("full")}
+          >
+            <Download size={16} aria-hidden />
+            <span>{running === "full" ? "Creating Full Backup..." : "Download Full Backup"}</span>
+          </button>
+          <button
+            className="secondary-action"
+            type="button"
+            disabled={Boolean(running)}
+            onClick={() => void runBackup("data")}
+          >
+            <Download size={16} aria-hidden />
+            <span>{running === "data" ? "Creating Data Backup..." : "Download Data Only"}</span>
+          </button>
+        </div>
       </section>
     </div>
   );
@@ -4748,9 +5926,9 @@ function AiCompanyInsightView({
           <h3>Insight Explorer</h3>
         </div>
         <div className="ai-insight-nav">
-          {context?.customerId ? (
+          {context ? (
             <button className="secondary-action" type="button" onClick={onBackToCustomer}>
-              <ArrowLeft size={14} aria-hidden /> Back to Customer
+              <ArrowLeft size={14} aria-hidden /> Back to {context.sourceView === "leads" ? "Lead" : "Customer"}
             </button>
           ) : null}
           <button className="secondary-action" type="button" onClick={onOpenJobs}>
@@ -4767,6 +5945,17 @@ function AiCompanyInsightView({
 
       {view === "search" ? (
         <>
+          {context && !context.customerId ? (
+            <section className="detail-panel compact-panel">
+              <div className="detail-header detail-header-inline">
+                <div>
+                  <p className="eyebrow">{context.sourceLabel ?? "Lead"} Context</p>
+                  <h3>{context.customerLabel ?? context.tradingName ?? "Lead source"}</h3>
+                  <p className="muted">Search uses the source business name and postcode from the lead.</p>
+                </div>
+              </div>
+            </section>
+          ) : null}
           {context?.customerId ? (
             <section className="detail-panel compact-panel">
               <div className="detail-header detail-header-inline">
@@ -5072,18 +6261,36 @@ function SearchRunsView({ state }: { state: LoadState<SearchRun[]> }) {
 
 function ProspectsView({
   state,
+  calendarEntryTypes,
+  users,
+  currentUserId,
   onDataChanged,
+  dataChangeNotice,
   viewState,
   onViewStateChange
 }: {
   state: LoadState<Prospect[]>;
+  calendarEntryTypes: CalendarEntryType[];
+  users: User[];
+  currentUserId: string;
   onDataChanged: () => void;
+  dataChangeNotice: DataChangeNotice | null;
   viewState: ProspectPageViewState;
   onViewStateChange: Dispatch<SetStateAction<ProspectPageViewState>>;
 }) {
   const [detailState, setDetailState] = useState<LoadState<ProspectDetail>>({ loading: false });
   const [selectedProspectId, setSelectedProspectId] = useState("");
   const [storedDetailIds, setStoredDetailIds] = useState<Set<string>>(() => new Set());
+  const [leadCreatedProspectIds, setLeadCreatedProspectIds] = useState<Set<number>>(() => new Set());
+  const [prospectSelectMode, setProspectSelectMode] = useState(false);
+  const [selectedProspectIds, setSelectedProspectIds] = useState<Set<number>>(() => new Set());
+  const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+  const [bulkLeadCreating, setBulkLeadCreating] = useState(false);
+  const [bulkDeletingProspects, setBulkDeletingProspects] = useState(false);
+  const [deleteWaveWarning, setDeleteWaveWarning] = useState<{
+    rows: Prospect[];
+    memberships: ProspectWaveMembership[];
+  } | null>(null);
   const [batchState, setBatchState] = useState<BatchFetchState>({
     open: false,
     running: false,
@@ -5135,9 +6342,33 @@ function ProspectsView({
     }));
   }
 
+  const ownerOptions = useMemo(() => {
+    return Array.from(new Set((state.data ?? []).map((row) => row.ownerName?.trim()).filter((owner): owner is string => Boolean(owner))))
+      .sort((left, right) => compareValues(left, right, "asc"));
+  }, [state.data]);
+  const addedFromTime = parseDateFilterStart(viewState.addedFrom);
+  const addedToTime = parseDateFilterEnd(viewState.addedTo);
+
   const sortedData = state.data
     ? [...state.data]
         .filter((row) => {
+          const addedTime = parseRowDateTime(row.addedAt);
+          if (addedFromTime !== null && (addedTime === null || addedTime < addedFromTime)) {
+            return false;
+          }
+          if (addedToTime !== null && (addedTime === null || addedTime > addedToTime)) {
+            return false;
+          }
+
+          const ownerFilter = viewState.ownerFilter?.trim() ?? "";
+          if (ownerFilter) {
+            if (ownerFilter === "__unassigned__") {
+              if (row.ownerName?.trim()) return false;
+            } else if ((row.ownerName?.trim() ?? "") !== ownerFilter) {
+              return false;
+            }
+          }
+
           const query = viewState.searchText.trim().toLowerCase();
           if (!query) return true;
 
@@ -5173,6 +6404,27 @@ function ProspectsView({
         )
     : state.data;
   const missingDetailRows = state.data?.filter((row) => !row.hasStoredDetail && !storedDetailIds.has(row.prospectId)) ?? [];
+  const selectedProspectRows = sortedData?.filter((row) => selectedProspectIds.has(row.id)) ?? [];
+  const allVisibleProspectsSelected = Boolean(sortedData?.length) && sortedData!.every((row) => selectedProspectIds.has(row.id));
+  const selectedLeadCreateTargets = selectedProspectRows.filter((row) =>
+    !row.ownerName?.trim() &&
+    !row.hasLead &&
+    !leadCreatedProspectIds.has(row.id) &&
+    !row.hasCustomerAttachment
+  );
+
+  useEffect(() => {
+    if (!state.data?.length) {
+      setSelectedProspectIds(new Set());
+      return;
+    }
+
+    const validIds = new Set(state.data.map((row) => row.id));
+    setSelectedProspectIds((current) => {
+      const next = new Set([...current].filter((prospectId) => validIds.has(prospectId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [state.data]);
 
   function openBatchModal() {
     setBatchState({
@@ -5263,20 +6515,273 @@ function ProspectsView({
     }));
   }
 
+  async function createLeadFromProspect(row: Prospect) {
+    setNotice(null);
+    const response = await fetchWithActor(`${apiBase}/api/prospects/${row.id}/lead`, { method: "POST" });
+    const payload = await response.json().catch(() => null) as { id?: number; error?: string } | null;
+    if (!response.ok) {
+      setNotice({ kind: "error", message: payload?.error ?? `Could not create lead from prospect ${row.prospectId}.` });
+      return;
+    }
+
+    setLeadCreatedProspectIds((current) => new Set(current).add(row.id));
+    setNotice({ kind: "success", message: `Lead #${payload?.id ?? ""} created from ${row.prospectId}.`.trim() });
+    onDataChanged();
+  }
+
+  function toggleProspectSelectMode() {
+    setProspectSelectMode((current) => {
+      if (current) {
+        setSelectedProspectIds(new Set());
+      }
+      return !current;
+    });
+  }
+
+  function toggleProspectRowSelection(prospectId: number) {
+    setSelectedProspectIds((current) => {
+      const next = new Set(current);
+      if (next.has(prospectId)) {
+        next.delete(prospectId);
+      } else {
+        next.add(prospectId);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllVisibleProspects() {
+    if (!sortedData?.length) return;
+    setSelectedProspectIds((current) => {
+      const next = new Set(current);
+      if (allVisibleProspectsSelected) {
+        for (const row of sortedData) {
+          next.delete(row.id);
+        }
+      } else {
+        for (const row of sortedData) {
+          next.add(row.id);
+        }
+      }
+      return next;
+    });
+  }
+
+  async function createLeadsForSelectedProspects() {
+    if (selectedLeadCreateTargets.length < 1) {
+      setNotice({ kind: "error", message: "No selected prospects are eligible. Leads are only created for selected rows with no owner and no existing lead." });
+      return;
+    }
+
+    setBulkLeadCreating(true);
+    setNotice(null);
+    let successCount = 0;
+    let failedCount = 0;
+    const createdIds = new Set<number>();
+
+    for (const row of selectedLeadCreateTargets) {
+      try {
+        const response = await fetchWithActor(`${apiBase}/api/prospects/${row.id}/lead`, { method: "POST" });
+        if (!response.ok) {
+          failedCount += 1;
+          continue;
+        }
+        successCount += 1;
+        createdIds.add(row.id);
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    if (createdIds.size > 0) {
+      setLeadCreatedProspectIds((current) => new Set([...current, ...createdIds]));
+      onDataChanged();
+    }
+
+    setBulkLeadCreating(false);
+    setNotice({
+      kind: failedCount ? "error" : "success",
+      message: failedCount
+        ? `Created ${successCount} leads, ${failedCount} failed. Skipped selected rows with an owner, existing lead, or customer attachment.`
+        : `Created ${successCount} leads. Skipped selected rows with an owner, existing lead, or customer attachment.`
+    });
+  }
+
+  async function startDeleteSelectedProspects() {
+    if (selectedProspectRows.length < 1) {
+      setNotice({ kind: "error", message: "No selected prospects to delete." });
+      return;
+    }
+
+    setBulkDeletingProspects(true);
+    setNotice(null);
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/prospects/wave-memberships`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prospectIds: selectedProspectRows.map((row) => row.id) })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const memberships = (await response.json()) as ProspectWaveMembership[];
+      if (memberships.length > 0) {
+        setDeleteWaveWarning({ rows: selectedProspectRows, memberships });
+        setBulkDeletingProspects(false);
+        return;
+      }
+
+      await deleteSelectedProspects(selectedProspectRows);
+    } catch (error) {
+      setBulkDeletingProspects(false);
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Could not check selected prospects before delete." });
+    }
+  }
+
+  async function deleteSelectedProspects(rows: Prospect[]) {
+    setBulkDeletingProspects(true);
+    setDeleteWaveWarning(null);
+    let successCount = 0;
+    let failedCount = 0;
+    const deletedIds = new Set<number>();
+
+    for (const row of rows) {
+      try {
+        const response = await fetchWithActor(`${apiBase}/api/prospects/${row.id}/archive`, { method: "POST" });
+        if (!response.ok) {
+          failedCount += 1;
+          continue;
+        }
+        successCount += 1;
+        deletedIds.add(row.id);
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    setSelectedProspectIds((current) => {
+      const next = new Set(current);
+      for (const id of deletedIds) {
+        next.delete(id);
+      }
+      return next;
+    });
+    setBulkDeletingProspects(false);
+    if (successCount > 0) {
+      onDataChanged();
+    }
+    setNotice({
+      kind: failedCount ? "error" : "success",
+      message: failedCount
+        ? `Deleted ${successCount} prospects, ${failedCount} failed. Prospects linked to leads cannot be deleted.`
+        : `Deleted ${successCount} selected prospects.`
+    });
+  }
+
+  function handleProspectRowClick(event: MouseEvent<HTMLTableRowElement>, prospect: Prospect) {
+    if (!prospectSelectMode) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest("button,a,input,select,textarea,label,summary,details,[role='button']")) {
+      return;
+    }
+    toggleProspectRowSelection(prospect.id);
+  }
+
+  function exportCurrentProspectsCsv() {
+    if (!sortedData?.length) return;
+
+    const rows = sortedData.map((row) => [
+      row.prospectId,
+      formatDate(row.addedAt),
+      row.createdOn ?? "",
+      row.businessName,
+      row.contactName ?? "",
+      row.contactEmail ?? "",
+      row.contactPhone ?? "",
+      row.ownerName ?? "",
+      row.postcode ?? "",
+      row.addressLine1 ?? "",
+      row.town ?? "",
+      row.county ?? "",
+      row.channel ?? "",
+      row.origin ?? "",
+      row.hasPaymentsenseCustomerMatch ? "Yes" : "No",
+      row.hasStoredDetail || storedDetailIds.has(row.prospectId) ? "Yes" : "No",
+      row.hasLead || leadCreatedProspectIds.has(row.id) ? "Yes" : "No",
+      row.hasCustomerAttachment ? "Yes" : "No"
+    ]);
+
+    const csv = buildCsv([
+      "Prospect ID",
+      "Added",
+      "Created On",
+      "Business",
+      "Contact",
+      "Email",
+      "Phone",
+      "Owner",
+      "Postcode",
+      "Address Line 1",
+      "Town",
+      "County",
+      "Channel",
+      "Origin",
+      "Paymentsense Customer Match",
+      "Stored Detail",
+      "Lead Exists",
+      "Attached To Customer"
+    ], rows);
+    downloadTextFile(csv, `prospects-${toDateInput(new Date())}.csv`, "text/csv;charset=utf-8");
+  }
+
   return (
     <>
       <section className="table-controls">
-        <div className="table-search">
-          <label htmlFor="prospect-page-search">Search prospects</label>
-          <input
-            id="prospect-page-search"
-            type="search"
-            value={viewState.searchText}
-            onChange={(event) => onViewStateChange((current) => ({ ...current, searchText: event.target.value }))}
-            placeholder={viewState.searchDetails ? "Prospect, contact, postcode, or stored detail" : "Prospect, contact, or postcode"}
-          />
+        <div className="table-search-group">
+          <div className="table-search">
+            <label htmlFor="prospect-page-search">Search prospects</label>
+            <input
+              id="prospect-page-search"
+              type="search"
+              value={viewState.searchText}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, searchText: event.target.value }))}
+              placeholder={viewState.searchDetails ? "Prospect, contact, postcode, or stored detail" : "Prospect, contact, or postcode"}
+            />
+          </div>
+          <div className="table-search">
+            <label htmlFor="prospect-page-added-from">Added from</label>
+            <input
+              id="prospect-page-added-from"
+              type="date"
+              value={viewState.addedFrom ?? ""}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, addedFrom: event.target.value }))}
+            />
+          </div>
+          <div className="table-search">
+            <label htmlFor="prospect-page-added-to">Added to</label>
+            <input
+              id="prospect-page-added-to"
+              type="date"
+              value={viewState.addedTo ?? ""}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, addedTo: event.target.value }))}
+            />
+          </div>
         </div>
         <div className="table-filter-actions">
+          <label className="header-filter">
+            <span>Owner</span>
+            <select
+              className="header-select"
+              value={viewState.ownerFilter ?? ""}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, ownerFilter: event.target.value }))}
+            >
+              <option value="">All owners</option>
+              <option value="__unassigned__">No owner</option>
+              {ownerOptions.map((owner) => (
+                <option key={owner} value={owner}>
+                  {owner}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="header-filter">
             <input
               type="checkbox"
@@ -5292,6 +6797,9 @@ function ProspectsView({
               onViewStateChange({
                 searchText: "",
                 searchDetails: false,
+                ownerFilter: "",
+                addedFrom: "",
+                addedTo: "",
                 sortKey: "addedAt",
                 sortDirection: "desc"
               })
@@ -5303,6 +6811,49 @@ function ProspectsView({
       </section>
       <section className="page-actions">
         <button
+          className={prospectSelectMode ? "secondary-action active-filter-action" : "secondary-action"}
+          type="button"
+          onClick={toggleProspectSelectMode}
+        >
+          {prospectSelectMode ? "Exit Select Mode" : "Select Prospects"}
+        </button>
+        {prospectSelectMode ? (
+          <span className="page-action-note">
+            {selectedProspectIds.size} selected
+          </span>
+        ) : null}
+        {prospectSelectMode ? (
+          <button
+            className="secondary-action"
+            type="button"
+            disabled={!sortedData?.length}
+            onClick={toggleAllVisibleProspects}
+          >
+            {allVisibleProspectsSelected ? "Clear Visible" : "Select All Visible"}
+          </button>
+        ) : null}
+        {prospectSelectMode && selectedProspectIds.size > 1 ? (
+          <button
+            className="page-action-button"
+            type="button"
+            disabled={bulkLeadCreating || selectedLeadCreateTargets.length === 0}
+            onClick={() => void createLeadsForSelectedProspects()}
+            title="Creates leads only for selected prospects with no owner and no existing lead"
+          >
+            {bulkLeadCreating ? "Creating Leads..." : `Create Leads (${selectedLeadCreateTargets.length})`}
+          </button>
+        ) : null}
+        {prospectSelectMode && selectedProspectIds.size > 1 ? (
+          <button
+            className="secondary-action destructive-action"
+            type="button"
+            disabled={bulkDeletingProspects}
+            onClick={() => void startDeleteSelectedProspects()}
+          >
+            {bulkDeletingProspects ? "Deleting..." : "Delete Selected"}
+          </button>
+        ) : null}
+        <button
           className="page-action-button"
           type="button"
           disabled={state.loading || !state.data?.length}
@@ -5313,7 +6864,22 @@ function ProspectsView({
         <span className="page-action-note">
           {missingDetailRows.length} prospect row{missingDetailRows.length === 1 ? "" : "s"} without stored detail
         </span>
+        <button className="secondary-action" type="button" onClick={onDataChanged}>
+          Refresh List
+        </button>
+        <button
+          className="secondary-action"
+          type="button"
+          disabled={state.loading || !sortedData?.length}
+          onClick={exportCurrentProspectsCsv}
+        >
+          Export CSV
+        </button>
       </section>
+      {dataChangeNotice ? (
+        <DataChangeBanner notice={dataChangeNotice} scope="prospects" onRefresh={onDataChanged} />
+      ) : null}
+      {notice ? <StatusBanner kind={notice.kind} message={notice.message} /> : null}
       <DataTable
         state={state.data ? { ...state, data: sortedData } : state}
         emptyMessage="No hardened prospects have been saved yet."
@@ -5324,20 +6890,48 @@ function ProspectsView({
           renderSortHeader("Business", viewState.sortKey === "businessName", viewState.sortDirection, () => handleSort("businessName")),
           renderSortHeader("Contact", viewState.sortKey === "contactName", viewState.sortDirection, () => handleSort("contactName")),
           "Email",
-          "Owner",
+          renderSortHeader("Owner", viewState.sortKey === "ownerName", viewState.sortDirection, () => handleSort("ownerName")),
           renderSortHeader("Postcode", viewState.sortKey === "postcode", viewState.sortDirection, () => handleSort("postcode")),
           "Flag"
         ]}
-        renderRow={(row) => (
+        renderRow={(row) => {
+          const hasLead = leadCreatedProspectIds.has(row.id) || row.hasLead;
+          const createDisabled = hasLead || row.hasCustomerAttachment;
+          const createTitle = hasLead
+            ? "This prospect already has a lead"
+            : row.hasCustomerAttachment
+              ? "This prospect is already attached to a customer"
+              : "Create lead from prospect";
+
+          return (
           <Fragment key={row.id}>
-            <tr className={getLeadLinkedRowClassName(row.prospectId === selectedProspectId, row.hasLead)}>
+            <tr
+              className={getLeadLinkedRowClassName(
+                row.prospectId === selectedProspectId,
+                hasLead,
+                prospectSelectMode,
+                selectedProspectIds.has(row.id)
+              )}
+              onClick={(event) => handleProspectRowClick(event, row)}
+            >
               <td>
-                <button className="details-button" type="button" onClick={() => void loadProspectDetail(row.prospectId)}>
+                <div className="row-action-group">
+                  <button className="details-button" type="button" onClick={() => void loadProspectDetail(row.prospectId)}>
                   {row.hasStoredDetail || storedDetailIds.has(row.prospectId) ? "Show" : "Details"}
-                </button>
+                  </button>
+                  <button
+                    className="details-button"
+                    type="button"
+                    title={createTitle}
+                    disabled={createDisabled}
+                    onClick={() => void createLeadFromProspect(row)}
+                  >
+                    Create Lead
+                  </button>
+                </div>
               </td>
               <td className="mono">{row.prospectId}</td>
-              <td>{formatDateTime(row.addedAt)}</td>
+              <td>{formatDate(row.addedAt)}</td>
               <td>{row.businessName}</td>
               <td>{row.contactName ?? ""}</td>
               <td><CopyableEmail email={row.contactEmail} /></td>
@@ -5346,15 +6940,29 @@ function ProspectsView({
               <td>{row.hasPaymentsenseCustomerMatch ? <Badge text="PS match" /> : ""}</td>
             </tr>
             {row.prospectId === selectedProspectId && (
-              <InlineProspectDetailRow colspan={9} detailState={detailState} />
+              <InlineProspectDetailRow
+                colspan={9}
+                detailState={detailState}
+                calendarEntryTypes={calendarEntryTypes}
+                users={users}
+                currentUserId={currentUserId}
+                reviewEntityId={row.id}
+              />
             )}
           </Fragment>
-        )}
+          );
+        }}
       />
       <BatchFetchModal
         state={batchState}
         onClose={closeBatchModal}
         onConfirm={() => void runBatchFetch()}
+      />
+      <ProspectDeleteWaveWarningModal
+        state={deleteWaveWarning}
+        saving={bulkDeletingProspects}
+        onClose={() => setDeleteWaveWarning(null)}
+        onConfirm={(rows) => void deleteSelectedProspects(rows)}
       />
     </>
   );
@@ -5488,6 +7096,7 @@ function CustomerRowContextMenu({
   onCopyEntityName,
   onCopyTradingName,
   onCopyPostcode,
+  onCreateLead,
   showListOptionsToggle = false,
   listOptionsHidden = false,
   onToggleListOptions
@@ -5500,6 +7109,7 @@ function CustomerRowContextMenu({
   onCopyEntityName: (customer: Customer) => Promise<void>;
   onCopyTradingName: (customer: Customer) => Promise<void>;
   onCopyPostcode: (customer: Customer) => Promise<void>;
+  onCreateLead?: (customer: Customer) => Promise<void>;
   showListOptionsToggle?: boolean;
   listOptionsHidden?: boolean;
   onToggleListOptions?: () => void;
@@ -5608,6 +7218,20 @@ function CustomerRowContextMenu({
         <Users size={16} aria-hidden />
         <span>Assign me</span>
       </button>
+      {onCreateLead && !customer.hasLead ? (
+        <button
+          className="customer-context-menu-button"
+          type="button"
+          title="Create lead"
+          onClick={() => {
+            void onCreateLead(customer);
+            onClose();
+          }}
+        >
+          <BadgeCheck size={16} aria-hidden />
+          <span>Create Lead</span>
+        </button>
+      ) : null}
       {showListOptionsToggle && onToggleListOptions ? (
         <button
           className="customer-context-menu-button"
@@ -5673,8 +7297,9 @@ function CustomerGeographyView({
   const [pulsingCustomerId, setPulsingCustomerId] = useState<number | null>(null);
 
   function leadToMapRow(lead: Lead): CustomerMapRow {
+    const customerId = lead.customerId ?? lead.id;
     return {
-      id: lead.customerId,
+      id: customerId,
       leadId: lead.id,
       customerRef: lead.customerRef,
       mid: lead.mid,
@@ -5807,9 +7432,12 @@ function CustomerGeographyView({
           }
           const leadIds = new Set(map.leadIds);
           const customerIds = new Set(map.customerIds);
-          const savedLeads = availableLeads.filter((lead) => leadIds.size ? leadIds.has(lead.id) : customerIds.has(lead.customerId));
+          const savedLeads = availableLeads.filter((lead) =>
+            lead.customerId !== undefined &&
+            (leadIds.size ? leadIds.has(lead.id) : customerIds.has(lead.customerId))
+          );
           for (const lead of savedLeads) {
-            nextRows[lead.customerId] = leadToMapRow(lead);
+            nextRows[lead.customerId!] = leadToMapRow(lead);
           }
           onViewStateChange((current) => ({ ...current, onlyCancelled: false }));
         } else {
@@ -5844,15 +7472,16 @@ function CustomerGeographyView({
     if (!leadRowsToLoad?.length) return;
 
     const nextRows: Record<number, CustomerMapRow> = {};
-    for (const lead of leadRowsToLoad) {
-      nextRows[lead.customerId] = leadToMapRow(lead);
+    const mappableLeads = leadRowsToLoad.filter((lead) => lead.customerId !== undefined);
+    for (const lead of mappableLeads) {
+      nextRows[lead.customerId!] = leadToMapRow(lead);
     }
 
     setCurrentSavedMap(null);
     setMapSelectionSource("leads");
     onViewStateChange((current) => ({ ...current, onlyCancelled: false }));
     setSelectedMapRows(nextRows);
-    void geocodeRows(leadRowsToLoad.map((lead) => lead.customerId));
+    void geocodeRows(mappableLeads.map((lead) => lead.customerId!));
     setNotice({
       kind: "success",
       message: `${leadRowsToLoad.length} selected lead${leadRowsToLoad.length === 1 ? "" : "s"} loaded on the map.`
@@ -5985,6 +7614,8 @@ function CustomerGeographyView({
       customerActivityStatusId: "",
       customerValueTypeId: "",
       assignedUserId: "",
+      waveId: "",
+      excludeWave: false,
       onlyBookmarked: false,
       onlyMapped: false,
       onlyCancelled: mapSelectionSource === "customers",
@@ -6409,18 +8040,22 @@ function CustomerGeographyView({
 
 function CustomersView({
   state,
+  campaigns,
   regions,
   customerActivityStatuses,
   customerValueTypes,
+  businessTypes,
   users,
   currentUser,
   currentUserId,
+  calendarEntryTypes,
   viewState,
   onViewStateChange,
   onOpenProspectTest,
   onOpenLead,
   onOpenAiCompanyInsight,
   onDataChanged,
+  dataChangeNotice,
   selectedCustomerId,
   highlightedCustomerId,
   onHighlightedCustomerIdChange,
@@ -6429,12 +8064,15 @@ function CustomersView({
   allowListOptionsToggle = true
 }: {
   state: LoadState<Customer[]>;
+  campaigns: Campaign[];
   regions: Region[];
   customerActivityStatuses: CustomerActivityStatusOption[];
   customerValueTypes: CustomerValueType[];
+  businessTypes: BusinessType[];
   users: User[];
   currentUser: User | null;
   currentUserId: string;
+  calendarEntryTypes: CalendarEntryType[];
   viewState: CustomerPageViewState;
   onViewStateChange: Dispatch<SetStateAction<CustomerPageViewState>>;
   onOpenProspectTest: (
@@ -6445,6 +8083,7 @@ function CustomersView({
   onOpenLead: (leadId: number) => void;
   onOpenAiCompanyInsight: (customer: Pick<Customer, "id" | "entityName" | "tradingName" | "postcode" | "hasAiInsightJobScheduled">) => void;
   onDataChanged: () => void;
+  dataChangeNotice: DataChangeNotice | null;
   selectedCustomerId: number | null;
   highlightedCustomerId: number | null;
   onHighlightedCustomerIdChange: Dispatch<SetStateAction<number | null>>;
@@ -6456,6 +8095,7 @@ function CustomersView({
   const [matchedCustomerIds, setMatchedCustomerIds] = useState<Set<number>>(() => new Set());
   const [assignedUserOverrides, setAssignedUserOverrides] = useState<Record<number, Pick<Customer, "assignedUserId" | "assignedUserName">>>({});
   const [bookmarkOverrides, setBookmarkOverrides] = useState<Record<number, boolean>>({});
+  const [leadCreatedCustomerIds, setLeadCreatedCustomerIds] = useState<Set<number>>(() => new Set());
   const [customerHasNotesOverrides, setCustomerHasNotesOverrides] = useState<Record<number, boolean>>({});
   const [customerValueTypeOverrides, setCustomerValueTypeOverrides] = useState<Record<number, Pick<Customer, "customerValueTypeId" | "customerValueTypeLabel" | "customerValueTypeDecimalValue" | "customerValueTypeShieldOrder" | "customerValueTypeImageFileName">>>({});
   const [customerAiJobScheduledOverrides, setCustomerAiJobScheduledOverrides] = useState<Record<number, boolean>>({});
@@ -6484,10 +8124,26 @@ function CustomersView({
   const [duplicateReviewMarks, setDuplicateReviewMarks] = useState<Record<number, "not_duplicate" | "archive_duplicate" | undefined>>({});
   const [showArchiveMarkedOnly, setShowArchiveMarkedOnly] = useState(false);
   const [archivingDuplicateRows, setArchivingDuplicateRows] = useState(false);
+  const [customerSelectMode, setCustomerSelectMode] = useState(false);
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<number>>(() => new Set());
   const customerListScrollRef = useRef<HTMLDivElement | null>(null);
   const duplicateReasonScrollTopRef = useRef(0);
   const duplicateReasonAnchorRowIdRef = useRef<number | null>(null);
   const restoreDuplicateReasonScrollRef = useRef(false);
+  const activeWaveOptions = useMemo(
+    () => campaigns
+      .flatMap((campaign) => campaign.waves.map((wave) => ({ ...wave, campaignName: campaign.name })))
+      .filter((wave) => !["completed", "cancelled", "canceled", "archived"].includes(wave.status.trim().toLowerCase()))
+      .sort((left, right) =>
+        compareValues(`${left.campaignName} ${left.waveNumber} ${left.name}`, `${right.campaignName} ${right.waveNumber} ${right.name}`, "asc")
+      ),
+    [campaigns]
+  );
+  const selectedWaveId = viewState.waveId?.trim() ?? "";
+  const selectedWaveOption = activeWaveOptions.find((wave) => String(wave.id) === selectedWaveId);
+  const [waveCustomerFilterState, setWaveCustomerFilterState] = useState<LoadState<Set<number>>>({ loading: false });
+  const selectedBusinessTypeId = viewState.businessTypeId?.trim() ?? "";
+  const [businessTypeCustomerFilterState, setBusinessTypeCustomerFilterState] = useState<LoadState<Set<number>>>({ loading: false });
 
   useEffect(() => {
     if (!state.data?.length) {
@@ -6526,11 +8182,85 @@ function CustomersView({
       );
       return Object.keys(next).length === Object.keys(current).length ? current : next;
     });
+    setLeadCreatedCustomerIds((current) => {
+      const next = new Set([...current].filter((customerId) => validIds.has(customerId)));
+      return next.size === current.size ? current : next;
+    });
+    setSelectedCustomerIds((current) => {
+      const next = new Set([...current].filter((customerId) => validIds.has(customerId)));
+      return next.size === current.size ? current : next;
+    });
   }, [state.data]);
 
   useEffect(() => {
     setBookmarkOverrides({});
   }, [currentUserId]);
+
+  useEffect(() => {
+    if (!selectedWaveId) {
+      setWaveCustomerFilterState({ loading: false });
+      return;
+    }
+
+    let cancelled = false;
+    setWaveCustomerFilterState({ loading: true });
+    fetchWithActor(`${apiBase}/api/campaign-waves/${selectedWaveId}/leads`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<Lead[]>;
+      })
+      .then((rows) => {
+        if (cancelled) return;
+        setWaveCustomerFilterState({
+          data: new Set(rows.map((lead) => lead.customerId).filter((customerId): customerId is number => customerId !== undefined)),
+          loading: false
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setWaveCustomerFilterState({
+          error: error instanceof Error ? error.message : "Could not load wave leads.",
+          loading: false
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedWaveId]);
+
+  useEffect(() => {
+    if (!selectedBusinessTypeId) {
+      setBusinessTypeCustomerFilterState({ loading: false });
+      return;
+    }
+
+    let cancelled = false;
+    setBusinessTypeCustomerFilterState({ loading: true });
+    fetchWithActor(`${apiBase}/api/business-types/${selectedBusinessTypeId}/customers`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<number[]>;
+      })
+      .then((customerIds) => {
+        if (cancelled) return;
+        setBusinessTypeCustomerFilterState({
+          data: new Set(customerIds),
+          loading: false
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setBusinessTypeCustomerFilterState({
+          error: error instanceof Error ? error.message : "Could not load customers for business type.",
+          loading: false
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBusinessTypeId]);
 
   async function showMatches(customer: Customer) {
     onSelectedCustomerIdChange(customer.id);
@@ -6560,6 +8290,57 @@ function CustomersView({
       return;
     }
     await showMatches(customer);
+  }
+
+  async function createLeadForCustomer(customer: Customer) {
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/customers/${customer.id}/lead`, { method: "POST" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      const lead = (await response.json()) as LeadSummary;
+      setLeadCreatedCustomerIds((current) => new Set(current).add(customer.id));
+      setNotice({ kind: "success", message: `Lead #${lead.id} created for ${customer.customerRef ?? customer.entityName}.` });
+      onDataChanged();
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not create lead."
+      });
+    }
+  }
+
+  function toggleCustomerSelectMode() {
+    setCustomerSelectMode((current) => {
+      if (current) {
+        setSelectedCustomerIds(new Set());
+      }
+      return !current;
+    });
+  }
+
+  function toggleCustomerRowSelection(customerId: number) {
+    setSelectedCustomerIds((current) => {
+      const next = new Set(current);
+      if (next.has(customerId)) {
+        next.delete(customerId);
+      } else {
+        next.add(customerId);
+      }
+      return next;
+    });
+  }
+
+  function handleCustomerRowClick(event: MouseEvent<HTMLTableRowElement>, customer: Customer) {
+    if (!customerSelectMode) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest("button,a,input,select,textarea,label,summary,details,[role='button']")) {
+      return;
+    }
+    toggleCustomerRowSelection(customer.id);
   }
 
   useEffect(() => {
@@ -6595,6 +8376,19 @@ function CustomersView({
 
     return () => cancelAnimationFrame(frame);
   }, [selectedCustomerId, matchState.loading]);
+
+  useEffect(() => {
+    if (!highlightedCustomerId || selectedCustomerId === highlightedCustomerId) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const row = document.querySelector(`[data-customer-row-id="${highlightedCustomerId}"]`) as HTMLElement | null;
+      row?.scrollIntoView({ block: "center", behavior: "auto" });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [highlightedCustomerId, selectedCustomerId, state.data]);
 
   async function updateCustomerRegion(customer: Customer, regionId: string) {
     setSavingRegionCustomerId(customer.id);
@@ -6970,6 +8764,7 @@ function CustomersView({
     ...row,
     ...(assignedUserOverrides[row.id] ?? {}),
     ...(customerValueTypeOverrides[row.id] ?? {}),
+    hasLead: leadCreatedCustomerIds.has(row.id) || row.hasLead,
     hasAiInsightJobScheduled: customerAiJobScheduledOverrides[row.id] ?? row.hasAiInsightJobScheduled,
     isBookmarked: bookmarkOverrides[row.id] ?? row.isBookmarked,
     hasNotes: customerHasNotesOverrides[row.id] ?? row.hasNotes
@@ -6983,6 +8778,20 @@ function CustomersView({
 
       if (viewState.onlyMatched && !(row.hasStoredMatches || matchedCustomerIds.has(row.id))) {
         return false;
+      }
+
+      if (selectedWaveId) {
+        const isInSelectedWave = waveCustomerFilterState.data?.has(row.id) ?? false;
+        if (viewState.excludeWave ? isInSelectedWave : !isInSelectedWave) {
+          return false;
+        }
+      }
+
+      if (selectedBusinessTypeId) {
+        const isInSelectedBusinessType = businessTypeCustomerFilterState.data?.has(row.id) ?? false;
+        if (!isInSelectedBusinessType) {
+          return false;
+        }
       }
 
       const postcodeQuery = viewState.postcodeText?.trim().toLowerCase() ?? "";
@@ -7126,7 +8935,10 @@ function CustomersView({
       regionId: "",
       customerActivityStatusId: "",
       customerValueTypeId: "",
+      businessTypeId: "",
       assignedUserId: "",
+      waveId: "",
+      excludeWave: false,
       onlyBookmarked: false,
       onlyCancelled: duplicateMode ? false : true,
       onlyMatched: false,
@@ -7358,6 +9170,68 @@ function CustomersView({
                 ))}
               </select>
             </div>
+            <div className="table-search table-search-compact">
+              <label htmlFor="customer-page-business-type-filter">Filter by business type</label>
+              <select
+                id="customer-page-business-type-filter"
+                value={viewState.businessTypeId ?? ""}
+                onChange={(event) => onViewStateChange((current) => ({ ...current, businessTypeId: event.target.value }))}
+              >
+                <option value="">All business types</option>
+                {businessTypes.map((businessType) => (
+                  <option key={businessType.id} value={businessType.id}>
+                    {businessType.sicCode ? `${businessType.name} (${businessType.sicCode})` : businessType.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {!duplicateMode ? (
+              <div className="table-search table-search-compact">
+                <span className="table-search-label">Filter by wave</span>
+                <details className="wave-filter-dropdown">
+                  <summary>
+                    {selectedWaveOption
+                      ? `${viewState.excludeWave ? "Not in" : "In"} ${selectedWaveOption.campaignName} - ${selectedWaveOption.name}`
+                      : "None"}
+                  </summary>
+                  <div className="wave-filter-menu">
+                    <button
+                      className="wave-filter-none"
+                      type="button"
+                      onClick={() => onViewStateChange((current) => ({ ...current, waveId: "", excludeWave: false }))}
+                    >
+                      None
+                    </button>
+                    {activeWaveOptions.map((wave) => {
+                      const waveValue = String(wave.id);
+                      const isSelected = selectedWaveId === waveValue;
+                      return (
+                        <div className={isSelected ? "wave-filter-option selected" : "wave-filter-option"} key={wave.id}>
+                          <button
+                            type="button"
+                            onClick={() => onViewStateChange((current) => ({ ...current, waveId: waveValue, excludeWave: false }))}
+                          >
+                            {`${wave.campaignName} - ${wave.name}`}
+                          </button>
+                          <label className="wave-filter-negative">
+                            <input
+                              type="checkbox"
+                              checked={isSelected && (viewState.excludeWave ?? false)}
+                              onChange={(event) => onViewStateChange((current) => ({
+                                ...current,
+                                waveId: waveValue,
+                                excludeWave: event.target.checked
+                              }))}
+                            />
+                            <span>Not</span>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
+              </div>
+            ) : null}
           <label className="table-filter-select" htmlFor="customer-page-value-filter">
             <span>Customer value</span>
             <select
@@ -7420,9 +9294,41 @@ function CustomersView({
             {showArchiveMarkedOnly ? <span>Showing archive-marked rows only</span> : null}
           </div>
         ) : null}
-      </section>
+        {!duplicateMode && selectedWaveId && waveCustomerFilterState.loading ? (
+          <StatusBanner kind="success" message="Loading customers for selected wave." />
+        ) : null}
+        {!duplicateMode && selectedWaveId && waveCustomerFilterState.error ? (
+          <StatusBanner kind="error" message={waveCustomerFilterState.error} />
+        ) : null}
+        {selectedBusinessTypeId && businessTypeCustomerFilterState.loading ? (
+          <StatusBanner kind="success" message="Loading customers for selected business type." />
+        ) : null}
+        {selectedBusinessTypeId && businessTypeCustomerFilterState.error ? (
+          <StatusBanner kind="error" message={businessTypeCustomerFilterState.error} />
+        ) : null}
+    </section>
     )}
     {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
+    <section className="page-actions customer-refresh-actions">
+      <button
+        className={customerSelectMode ? "secondary-action active-filter-action" : "secondary-action"}
+        type="button"
+        onClick={toggleCustomerSelectMode}
+      >
+        {customerSelectMode ? "Exit Select Mode" : "Select Customers"}
+      </button>
+      {customerSelectMode ? (
+        <span className="page-action-note">
+          {selectedCustomerIds.size} selected
+        </span>
+      ) : null}
+      <button className="secondary-action" type="button" onClick={onDataChanged}>
+        Refresh List
+      </button>
+    </section>
+    {dataChangeNotice ? (
+      <DataChangeBanner notice={dataChangeNotice} scope="customers" onRefresh={onDataChanged} />
+    ) : null}
     <div ref={customerListScrollRef} className={showListOptions ? "customer-list-scroll" : "customer-list-scroll customer-list-scroll-expanded"}>
       <DataTable
         className="customers-page-table"
@@ -7454,8 +9360,16 @@ function CustomersView({
         return (
         <Fragment key={row.id}>
           <tr
-            className={getCustomerRowClassName(row.id === selectedCustomerId, row.id === highlightedCustomerId, row.hasLead, duplicateMode)}
+            className={getCustomerRowClassName(
+              row.id === selectedCustomerId,
+              row.id === highlightedCustomerId,
+              row.hasLead,
+              duplicateMode,
+              customerSelectMode,
+              selectedCustomerIds.has(row.id)
+            )}
             data-customer-row-id={row.id}
+            onClick={(event) => handleCustomerRowClick(event, row)}
             onContextMenu={(event) => {
               event.preventDefault();
               setCustomerContextMenuState({
@@ -7589,7 +9503,23 @@ function CustomersView({
                 ""
               )}
             </td>
-            <td>{renderCustomerStatus(row.status, row.customerKind, row.hasNotes, row.hasOwnedChecklistMatch, row.customerValueTypeImageFileName, row.attachedProspectCount, () => void openCustomerNotes(row), () => void openCustomerOwnedChecklist(row))}</td>
+            <td>
+              {renderCustomerStatus(
+                row.status,
+                row.customerKind,
+                row.hasNotes,
+                row.hasOwnedChecklistMatch,
+                row.customerValueTypeImageFileName,
+                row.attachedProspectCount,
+                () => void openCustomerNotes(row),
+                () => void openCustomerOwnedChecklist(row),
+                {
+                  label: row.customerValueTypeLabel,
+                  decimalValue: row.customerValueTypeDecimalValue,
+                  shieldOrder: row.customerValueTypeShieldOrder
+                }
+              )}
+            </td>
           </tr>
           {row.id === selectedCustomerId && (
             <CustomerMatchDetailRow
@@ -7598,6 +9528,9 @@ function CustomersView({
               customerId={row.id}
               customer={row}
               customerValueTypes={customerValueTypes}
+              calendarEntryTypes={calendarEntryTypes}
+              users={users}
+              currentUserId={currentUserId}
               notesRefreshKey={customerNotesRefreshKeys[row.id] ?? 0}
               onCustomerValueChanged={(customerId, next) =>
                 setCustomerValueTypeOverrides((current) => ({ ...current, [customerId]: next }))
@@ -7633,6 +9566,7 @@ function CustomersView({
         onCopyEntityName={(customer) => copyCustomerRowValue(customer.entityName, "Entity name")}
         onCopyTradingName={(customer) => copyCustomerRowValue(customer.tradingName, "Trading name")}
         onCopyPostcode={(customer) => copyCustomerRowValue(customer.postcode, "Postcode")}
+        onCreateLead={(customer) => createLeadForCustomer(customer)}
         showListOptionsToggle={allowListOptionsToggle}
         listOptionsHidden={listOptionsHidden}
         onToggleListOptions={() => setListOptionsHidden((current) => !current)}
@@ -7939,10 +9873,23 @@ function ProspectCleanseView({
 
   const addedFromTime = parseDateTimeFilter(viewState.addedFrom);
   const addedToTime = parseDateTimeFilter(viewState.addedTo);
+  const ownerOptions = useMemo(() => {
+    return Array.from(new Set((state.data ?? []).map((row) => row.ownerName?.trim()).filter((owner): owner is string => Boolean(owner))))
+      .sort((left, right) => compareValues(left, right, "asc"));
+  }, [state.data]);
 
   const sortedData = state.data
     ? [...state.data]
         .filter((row) => {
+          const ownerFilter = viewState.ownerFilter?.trim() ?? "";
+          if (ownerFilter) {
+            if (ownerFilter === "__unassigned__") {
+              if (row.ownerName?.trim()) return false;
+            } else if ((row.ownerName?.trim() ?? "") !== ownerFilter) {
+              return false;
+            }
+          }
+
           const addedTime = parseRowDateTime(row.addedAt);
           if (addedFromTime !== null && (addedTime === null || addedTime < addedFromTime)) {
             return false;
@@ -8118,6 +10065,22 @@ function ProspectCleanseView({
               onChange={(event) => onViewStateChange((current) => ({ ...current, addedTo: event.target.value }))}
             />
           </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="prospect-cleanse-owner-filter">Filter by owner</label>
+            <select
+              id="prospect-cleanse-owner-filter"
+              value={viewState.ownerFilter ?? ""}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, ownerFilter: event.target.value }))}
+            >
+              <option value="">All owners</option>
+              <option value="__unassigned__">No owner</option>
+              {ownerOptions.map((owner) => (
+                <option key={owner} value={owner}>
+                  {owner}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         <div className="table-filter-actions">
           <label className="header-filter">
@@ -8143,6 +10106,7 @@ function ProspectCleanseView({
               onViewStateChange({
                 searchText: "",
                 searchDetails: false,
+                ownerFilter: "",
                 addedFrom: "",
                 addedTo: "",
                 sortKey: "addedAt",
@@ -8173,7 +10137,7 @@ function ProspectCleanseView({
           renderSortHeader("Business", viewState.sortKey === "businessName", viewState.sortDirection, () => handleSort("businessName")),
           renderSortHeader("Contact", viewState.sortKey === "contactName", viewState.sortDirection, () => handleSort("contactName")),
           "Email",
-          "Owner",
+          renderSortHeader("Owner", viewState.sortKey === "ownerName", viewState.sortDirection, () => handleSort("ownerName")),
           renderSortHeader("Postcode", viewState.sortKey === "postcode", viewState.sortDirection, () => handleSort("postcode")),
           "Flag"
         ]}
@@ -8243,12 +10207,14 @@ function ProspectCleanseView({
 function CustomerCleanseView({
   state,
   regions,
+  users,
   viewState,
   onViewStateChange,
   onDataChanged
 }: {
   state: LoadState<Customer[]>;
   regions: Region[];
+  users: User[];
   viewState: CustomerPageViewState;
   onViewStateChange: Dispatch<SetStateAction<CustomerPageViewState>>;
   onDataChanged: () => void;
@@ -8326,6 +10292,16 @@ function CustomerCleanseView({
 
       if (viewState.regionId && String(row.regionId ?? "") !== viewState.regionId) {
         return false;
+      }
+
+      if (viewState.assignedUserId) {
+        if (viewState.assignedUserId === "__unassigned__") {
+          if (row.assignedUserId) {
+            return false;
+          }
+        } else if (String(row.assignedUserId ?? "") !== viewState.assignedUserId) {
+          return false;
+        }
       }
 
       const addedTime = parseRowDateTime(row.addedAt);
@@ -8519,6 +10495,22 @@ function CustomerCleanseView({
               ))}
             </select>
           </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="customer-cleanse-owner-filter">Filter by owner</label>
+            <select
+              id="customer-cleanse-owner-filter"
+              value={viewState.assignedUserId ?? ""}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, assignedUserId: event.target.value }))}
+            >
+              <option value="">All owners</option>
+              <option value="__unassigned__">Unassigned</option>
+              {users.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.fullName}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         <div className="table-filter-actions">
           <label className="header-filter">
@@ -8545,6 +10537,7 @@ function CustomerCleanseView({
               searchText: "",
               postcodeText: "",
               regionId: "",
+              assignedUserId: "",
               onlyCancelled: false,
               onlyMatched: false,
               addedFrom: "",
@@ -8577,6 +10570,7 @@ function CustomerCleanseView({
           renderSortHeader("Added", viewState.sortKey === "addedAt", viewState.sortDirection, () => handleSort("addedAt")),
           renderSortHeader("Entity", viewState.sortKey === "entityName", viewState.sortDirection, () => handleSort("entityName")),
           renderSortHeader("Trading name", viewState.sortKey === "tradingName", viewState.sortDirection, () => handleSort("tradingName")),
+          "Owner",
           "Region",
           renderSortHeader("Postcode", viewState.sortKey === "postcode", viewState.sortDirection, () => handleSort("postcode")),
           <label className="header-filter" key="customer-cleanse-status-filter">
@@ -8621,6 +10615,7 @@ function CustomerCleanseView({
             <td>{formatDateTime(row.addedAt)}</td>
             <td>{row.entityName}</td>
             <td>{row.tradingName ?? ""}</td>
+            <td>{row.assignedUserName ?? ""}</td>
             <td>{row.regionName ?? ""}</td>
             <td className="mono">{row.postcode ?? ""}</td>
             <td>{renderCustomerStatus(row.status, row.customerKind, row.hasNotes, row.hasOwnedChecklistMatch, row.customerValueTypeImageFileName, row.attachedProspectCount)}</td>
@@ -9058,6 +11053,8 @@ function LeadsView({
   leadStatuses,
   onOpenLead,
   onRemoveLead,
+  onDataChanged,
+  dataChangeNotice,
   viewState,
   onViewStateChange,
   onOpenSelectedLeadsMap
@@ -9068,6 +11065,8 @@ function LeadsView({
   leadStatuses: LeadStatusOption[];
   onOpenLead: (leadId: number) => void;
   onRemoveLead: () => void;
+  onDataChanged: () => void;
+  dataChangeNotice: DataChangeNotice | null;
   viewState: LeadViewState;
   onViewStateChange: Dispatch<SetStateAction<LeadViewState>>;
   onOpenSelectedLeadsMap: (leads: Lead[]) => void;
@@ -9076,6 +11075,14 @@ function LeadsView({
   const [notice, setNotice] = useState<ArchiveNotice | null>(null);
   const pendingScrollRestoreRef = useRef<{ top: number; attempts: number } | null>(null);
   const [savingLeadPriorityId, setSavingLeadPriorityId] = useState<number | null>(null);
+  const [campaignLeadFilterState, setCampaignLeadFilterState] = useState<LoadState<Set<number>>>({ loading: false });
+  const [waveLeadFilterState, setWaveLeadFilterState] = useState<LoadState<Set<number>>>({ loading: false });
+  const [leadMembershipState, setLeadMembershipState] = useState<LoadState<Map<number, LeadCampaignMembership[]>>>({ loading: false });
+  const [deletingSelectedLeads, setDeletingSelectedLeads] = useState(false);
+  const [deleteConfirmState, setDeleteConfirmState] = useState<{
+    leads: Lead[];
+    memberships: LeadCampaignMembership[];
+  } | null>(null);
 
   function handleSort(nextKey: LeadViewState["sortKey"]) {
     if (viewState.sortKey === nextKey) {
@@ -9093,6 +11100,121 @@ function LeadsView({
     }));
   }
 
+  const selectedFilterCampaign = campaigns.find((campaign) => String(campaign.id) === viewState.filterCampaignId);
+  const availableFilterWaves = selectedFilterCampaign?.waves ?? campaigns.flatMap((campaign) => campaign.waves);
+  const selectedCampaign = campaigns.find((campaign) => String(campaign.id) === viewState.selectedCampaignId);
+  const availableWaves = selectedCampaign?.waves ?? [];
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setLeadMembershipState({ loading: true });
+    fetchWithActor(`${apiBase}/api/leads/campaign-memberships`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<LeadCampaignMembership[]>;
+      })
+      .then((rows) => {
+        if (cancelled) return;
+        const next = new Map<number, LeadCampaignMembership[]>();
+        for (const row of rows) {
+          const existing = next.get(row.leadId);
+          if (existing) {
+            existing.push(row);
+          } else {
+            next.set(row.leadId, [row]);
+          }
+        }
+        setLeadMembershipState({ data: next, loading: false });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setLeadMembershipState({
+          error: error instanceof Error ? error.message : "Could not load lead campaign memberships.",
+          loading: false
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!viewState.filterCampaignId) {
+      setCampaignLeadFilterState({ loading: false });
+      return;
+    }
+
+    let cancelled = false;
+    const campaign = campaigns.find((row) => String(row.id) === viewState.filterCampaignId);
+    if (!campaign) {
+      setCampaignLeadFilterState({ data: new Set(), loading: false });
+      return;
+    }
+
+    setCampaignLeadFilterState({ loading: true });
+    Promise.all(
+      campaign.waves.map((wave) =>
+        fetchWithActor(`${apiBase}/api/campaign-waves/${wave.id}/leads`).then((response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return response.json() as Promise<Lead[]>;
+        })
+      )
+    )
+      .then((waveRows) => {
+        if (cancelled) return;
+        setCampaignLeadFilterState({
+          data: new Set(waveRows.flat().map((lead) => lead.id)),
+          loading: false
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setCampaignLeadFilterState({
+          error: error instanceof Error ? error.message : "Could not load campaign leads.",
+          loading: false
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [campaigns, viewState.filterCampaignId]);
+
+  useEffect(() => {
+    if (!viewState.filterWaveId) {
+      setWaveLeadFilterState({ loading: false });
+      return;
+    }
+
+    let cancelled = false;
+    setWaveLeadFilterState({ loading: true });
+    fetchWithActor(`${apiBase}/api/campaign-waves/${viewState.filterWaveId}/leads`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<Lead[]>;
+      })
+      .then((rows) => {
+        if (cancelled) return;
+        setWaveLeadFilterState({
+          data: new Set(rows.map((lead) => lead.id)),
+          loading: false
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setWaveLeadFilterState({
+          error: error instanceof Error ? error.message : "Could not load wave leads.",
+          loading: false
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [viewState.filterWaveId]);
+
   const filteredLeads = state.data
     ?.filter((row) => {
       if (viewState.statusFilter !== "all" && row.leadStatus !== viewState.statusFilter) {
@@ -9107,6 +11229,30 @@ function LeadsView({
         return false;
       }
 
+      const createdTime = parseRowDateTime(row.createdAt);
+      const createdFromTime = parseDateFilterStart(viewState.createdFrom);
+      const createdToTime = parseDateFilterEnd(viewState.createdTo);
+      if (createdFromTime !== null && (createdTime === null || createdTime < createdFromTime)) {
+        return false;
+      }
+      if (createdToTime !== null && (createdTime === null || createdTime > createdToTime)) {
+        return false;
+      }
+
+      if (viewState.filterCampaignId) {
+        const isInCampaign = campaignLeadFilterState.data?.has(row.id) ?? false;
+        if (viewState.excludeCampaign ? isInCampaign : !isInCampaign) {
+          return false;
+        }
+      }
+
+      if (viewState.filterWaveId) {
+        const isInWave = waveLeadFilterState.data?.has(row.id) ?? false;
+        if (viewState.excludeWave ? isInWave : !isInWave) {
+          return false;
+        }
+      }
+
       const query = viewState.searchText.trim().toLowerCase();
       if (!query) return true;
 
@@ -9119,6 +11265,7 @@ function LeadsView({
         row.contactPhone,
         row.contactEmail,
         row.postcode,
+        getLeadSourceLabel(row),
         row.leadStatus
       ]
         .filter(Boolean)
@@ -9132,8 +11279,6 @@ function LeadsView({
       )
     );
 
-  const selectedCampaign = campaigns.find((campaign) => String(campaign.id) === viewState.selectedCampaignId);
-  const availableWaves = selectedCampaign?.waves ?? [];
   const visibleLeadIds = filteredLeads?.map((row) => row.id) ?? [];
   const selectedVisibleCount = visibleLeadIds.filter((id) => selectedLeadIds.has(id)).length;
   const allVisibleSelected = visibleLeadIds.length > 0 && selectedVisibleCount === visibleLeadIds.length;
@@ -9170,6 +11315,60 @@ function LeadsView({
 
     setSelectedLeadIds(new Set());
     setNotice({ kind: "success", message: `${leadIds.length} lead${leadIds.length === 1 ? "" : "s"} added to wave.` });
+  }
+
+  function startDeleteSelectedLeads() {
+    if (!selectedVisibleLeads.length) {
+      setNotice({ kind: "error", message: "No selected leads to delete." });
+      return;
+    }
+
+    const memberships = selectedVisibleLeads.flatMap((lead) => leadMembershipState.data?.get(lead.id) ?? []);
+    setDeleteConfirmState({ leads: selectedVisibleLeads, memberships });
+  }
+
+  async function deleteSelectedLeads(leads: Lead[]) {
+    if (!leads.length) return;
+
+    setDeletingSelectedLeads(true);
+    setDeleteConfirmState(null);
+    setNotice(null);
+    let successCount = 0;
+    let failedCount = 0;
+    const deletedIds = new Set<number>();
+
+    for (const lead of leads) {
+      try {
+        const response = await fetchWithActor(`${apiBase}/api/leads/${lead.id}`, { method: "DELETE" });
+        if (!response.ok) {
+          failedCount += 1;
+          continue;
+        }
+        successCount += 1;
+        deletedIds.add(lead.id);
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    setSelectedLeadIds((current) => {
+      const next = new Set(current);
+      for (const id of deletedIds) {
+        next.delete(id);
+      }
+      return next;
+    });
+    setDeletingSelectedLeads(false);
+    if (successCount > 0) {
+      onRemoveLead();
+      onDataChanged();
+    }
+    setNotice({
+      kind: failedCount ? "error" : "success",
+      message: failedCount
+        ? `Deleted ${successCount} leads, ${failedCount} failed.`
+        : `Deleted ${successCount} selected lead${successCount === 1 ? "" : "s"}.`
+    });
   }
 
   async function assignLeadUser(leadId: number, assignedUserId: string) {
@@ -9328,6 +11527,90 @@ function LeadsView({
             </select>
           </div>
           <div className="table-search table-search-compact">
+            <label htmlFor="lead-created-from">Created from</label>
+            <input
+              id="lead-created-from"
+              type="date"
+              value={viewState.createdFrom ?? ""}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, createdFrom: event.target.value }))}
+            />
+          </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="lead-created-to">Created to</label>
+            <input
+              id="lead-created-to"
+              type="date"
+              value={viewState.createdTo ?? ""}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, createdTo: event.target.value }))}
+            />
+          </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="lead-filter-campaign-select">Filter by campaign</label>
+            <select
+              id="lead-filter-campaign-select"
+              className="header-select"
+              value={viewState.filterCampaignId}
+              onChange={(event) =>
+                onViewStateChange((current) => ({
+                  ...current,
+                  filterCampaignId: event.target.value,
+                  filterWaveId: "",
+                  excludeCampaign: event.target.value ? current.excludeCampaign : false,
+                  excludeWave: false
+                }))
+              }
+            >
+              <option value="">All campaigns</option>
+              {campaigns.map((campaign) => (
+                <option key={campaign.id} value={campaign.id}>
+                  {campaign.name}
+                </option>
+              ))}
+            </select>
+            {viewState.filterCampaignId ? (
+              <label className="header-filter">
+                <input
+                  type="checkbox"
+                  checked={viewState.excludeCampaign}
+                  onChange={(event) => onViewStateChange((current) => ({ ...current, excludeCampaign: event.target.checked }))}
+                />
+                <span>NOT</span>
+              </label>
+            ) : null}
+          </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="lead-filter-wave-select">Filter by wave</label>
+            <select
+              id="lead-filter-wave-select"
+              className="header-select"
+              value={viewState.filterWaveId}
+              onChange={(event) => onViewStateChange((current) => ({
+                ...current,
+                filterWaveId: event.target.value,
+                excludeWave: event.target.value ? current.excludeWave : false
+              }))}
+            >
+              <option value="">All waves</option>
+              {availableFilterWaves.map((wave) => (
+                <option key={wave.id} value={wave.id}>
+                  {wave.waveNumber}. {wave.name}
+                </option>
+              ))}
+            </select>
+            {viewState.filterWaveId ? (
+              <label className="header-filter">
+                <input
+                  type="checkbox"
+                  checked={viewState.excludeWave}
+                  onChange={(event) => onViewStateChange((current) => ({ ...current, excludeWave: event.target.checked }))}
+                />
+                <span>NOT</span>
+              </label>
+            ) : null}
+          </div>
+        </div>
+        <div className="table-filter-actions">
+          <div className="table-search table-search-compact">
             <label htmlFor="lead-campaign-select">Campaign</label>
             <select
               id="lead-campaign-select"
@@ -9366,8 +11649,6 @@ function LeadsView({
               ))}
             </select>
           </div>
-        </div>
-        <div className="table-filter-actions">
           <button
             className="page-action-button"
             type="button"
@@ -9384,8 +11665,19 @@ function LeadsView({
           >
             View Selected On Map
           </button>
+          <button
+            className="secondary-action destructive-action"
+            type="button"
+            disabled={selectedVisibleLeads.length === 0 || deletingSelectedLeads}
+            onClick={startDeleteSelectedLeads}
+          >
+            {deletingSelectedLeads ? "Deleting..." : "Delete Selected Leads"}
+          </button>
           <button className="secondary-action" type="button" onClick={downloadCsv}>
             Download CSV
+          </button>
+          <button className="secondary-action" type="button" onClick={onDataChanged}>
+            Refresh Leads
           </button>
           <button
             className="secondary-action"
@@ -9396,6 +11688,12 @@ function LeadsView({
                 statusFilter: "all",
                 priorityFilter: "all",
                 assignedUserId: "",
+                filterCampaignId: "",
+                excludeCampaign: false,
+                filterWaveId: "",
+                excludeWave: false,
+                createdFrom: "",
+                createdTo: "",
                 selectedCampaignId: "",
                 selectedWaveId: "",
                 sortKey: "createdAt",
@@ -9407,6 +11705,24 @@ function LeadsView({
           </button>
         </div>
       </section>
+      {dataChangeNotice ? (
+        <DataChangeBanner notice={dataChangeNotice} scope="leads" onRefresh={onDataChanged} />
+      ) : null}
+      {viewState.filterCampaignId && campaignLeadFilterState.loading ? (
+        <StatusBanner kind="success" message="Loading campaign lead filter." />
+      ) : null}
+      {viewState.filterCampaignId && campaignLeadFilterState.error ? (
+        <StatusBanner kind="error" message={campaignLeadFilterState.error} />
+      ) : null}
+      {viewState.filterWaveId && waveLeadFilterState.loading ? (
+        <StatusBanner kind="success" message="Loading wave lead filter." />
+      ) : null}
+      {viewState.filterWaveId && waveLeadFilterState.error ? (
+        <StatusBanner kind="error" message={waveLeadFilterState.error} />
+      ) : null}
+      {leadMembershipState.error ? (
+        <StatusBanner kind="error" message={leadMembershipState.error} />
+      ) : null}
       {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
       <DataTable
         state={state.data ? { ...state, data: filteredLeads } : state}
@@ -9421,15 +11737,17 @@ function LeadsView({
           <span>Select</span>
         </label>,
         renderSortHeader("Lead", viewState.sortKey === "id", viewState.sortDirection, () => handleSort("id")),
+        "Source",
         renderSortHeader("Customer", viewState.sortKey === "customerName", viewState.sortDirection, () => handleSort("customerName")),
         renderSortHeader("User", viewState.sortKey === "assignedUserName", viewState.sortDirection, () => handleSort("assignedUserName")),
         renderSortHeader("Trading name", viewState.sortKey === "tradingName", viewState.sortDirection, () => handleSort("tradingName")),
         "Phone",
         "Email",
+        "Campaign",
+        "Wave",
         renderSortHeader("Postcode", viewState.sortKey === "postcode", viewState.sortDirection, () => handleSort("postcode")),
         renderSortHeader("Priority", viewState.sortKey === "leadPriority", viewState.sortDirection, () => handleSort("leadPriority")),
-        renderSortHeader("Prospects", viewState.sortKey === "prospectCount", viewState.sortDirection, () => handleSort("prospectCount")),
-        renderSortHeader("Contact history", viewState.sortKey === "contactHistoryCount", viewState.sortDirection, () => handleSort("contactHistoryCount")), (
+        (
           <select
             key="lead-status-filter"
             className="header-select"
@@ -9444,7 +11762,9 @@ function LeadsView({
             ))}
           </select>
         ), renderSortHeader("Created", viewState.sortKey === "createdAt", viewState.sortDirection, () => handleSort("createdAt"))]}
-        renderRow={(row) => (
+        renderRow={(row) => {
+          const memberships = leadMembershipState.data?.get(row.id) ?? [];
+          return (
           <tr key={row.id}>
             <td>
               <input
@@ -9468,6 +11788,11 @@ function LeadsView({
               </button>
             </td>
             <td>
+              <span className="match-chip" title={row.sourceQuoteId ? `Quote ${row.sourceQuoteId}` : getLeadSourceLabel(row)}>
+                {getLeadSourceLabel(row)}
+              </span>
+            </td>
+            <td>
               <span className="stacked">{row.customerName}</span>
             </td>
             <td>
@@ -9485,8 +11810,10 @@ function LeadsView({
               </select>
             </td>
             <td>{row.tradingName ?? ""}</td>
-            <td>{row.contactPhone ?? ""}</td>
-            <td><CopyableEmail email={row.contactEmail} /></td>
+            <td className="lead-phone-cell">{formatUkPhoneNumber(row.contactPhone)}</td>
+            <td className="lead-email-cell"><CopyableEmail email={row.contactEmail} /></td>
+            <td>{renderLeadCampaigns(memberships)}</td>
+            <td>{renderLeadWaves(memberships)}</td>
             <td className="mono">{row.postcode ?? ""}</td>
             <td>
               <LeadPriorityLights
@@ -9495,8 +11822,6 @@ function LeadsView({
                 onChange={(priority) => void updateLeadPriority(row.id, priority)}
               />
             </td>
-            <td>{row.prospectCount}</td>
-            <td>{row.contactHistoryCount}</td>
             <td>
               <select
                 className="header-select"
@@ -9512,9 +11837,91 @@ function LeadsView({
             </td>
             <td>{formatDateTime(row.createdAt)}</td>
           </tr>
-        )}
+          );
+        }}
+      />
+      <LeadDeleteConfirmModal
+        state={deleteConfirmState}
+        saving={deletingSelectedLeads}
+        onClose={() => setDeleteConfirmState(null)}
+        onConfirm={(leads) => void deleteSelectedLeads(leads)}
       />
     </>
+  );
+}
+
+function LeadDeleteConfirmModal({
+  state,
+  saving,
+  onClose,
+  onConfirm
+}: {
+  state: { leads: Lead[]; memberships: LeadCampaignMembership[] } | null;
+  saving: boolean;
+  onClose: () => void;
+  onConfirm: (leads: Lead[]) => void;
+}) {
+  if (!state) return null;
+
+  const leadById = new Map(state.leads.map((lead) => [lead.id, lead]));
+  const grouped = state.memberships.reduce((map, membership) => {
+    const rows = map.get(membership.leadId) ?? [];
+    rows.push(membership);
+    map.set(membership.leadId, rows);
+    return map;
+  }, new Map<number, LeadCampaignMembership[]>());
+  const hasWaveMemberships = state.memberships.length > 0;
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel" aria-modal="true" aria-labelledby="lead-delete-title" role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Lead Delete</p>
+            <h3 id="lead-delete-title">Delete selected leads?</h3>
+          </div>
+          {!saving && (
+            <button className="modal-close" type="button" onClick={onClose}>
+              Close
+            </button>
+          )}
+        </div>
+        <div className="modal-body">
+          <p>
+            This will delete <strong>{state.leads.length}</strong> selected lead{state.leads.length === 1 ? "" : "s"}.
+            {hasWaveMemberships ? " Some selected leads are already assigned to campaign waves; continuing will remove those wave links as well." : ""}
+          </p>
+          {hasWaveMemberships ? (
+            <div className="modal-list">
+              {[...grouped.entries()].map(([leadId, memberships]) => {
+                const lead = leadById.get(leadId);
+                return (
+                  <article className="detail-card compact-card" key={leadId}>
+                    <strong>Lead #{leadId}</strong>
+                    <div className="muted">{lead?.customerName ?? ""}</div>
+                    <div className="ai-insight-chip-grid">
+                      {memberships.map((membership) => (
+                        <span className="match-chip" key={`${membership.campaignId}-${membership.waveId}`}>
+                          {membership.campaignName} / Wave {membership.waveNumber}: {membership.waveName}
+                        </span>
+                      ))}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
+          <div className="modal-actions">
+            <button className="secondary-action" type="button" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button className="page-action-button destructive-action" type="button" onClick={() => onConfirm(state.leads)} disabled={saving}>
+              {saving ? "Deleting..." : "Continue Delete"}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -9525,8 +11932,10 @@ function LeadDetailView({
   onLeadChanged,
   users,
   leadStatuses,
+  responseStatuses,
   customerValueTypes,
-  defaultUserId
+  defaultUserId,
+  onOpenAiCompanyInsight
 }: {
   leadId: number;
   onBack: () => void;
@@ -9534,23 +11943,29 @@ function LeadDetailView({
   onLeadChanged: () => void;
   users: User[];
   leadStatuses: LeadStatusOption[];
+  responseStatuses: ResponseStatusOption[];
   customerValueTypes: CustomerValueType[];
   defaultUserId: string;
+  onOpenAiCompanyInsight: (lead: LeadDetail) => void;
 }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const state = useApi<LeadDetail>(`/api/leads/${leadId}`, refreshKey);
+  const telesalesHistoryState = useApi<TelesaleLeadInteractionDetail[]>(`/api/leads/${leadId}/telesales-interactions`, refreshKey);
   const [removed, setRemoved] = useState(false);
   const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+  const [showContactHistoryModal, setShowContactHistoryModal] = useState(false);
   const [historyForm, setHistoryForm] = useState<LeadContactHistoryFormState>({
     channel: "email",
     contactedAt: "",
     reason: "",
     whoBy: "",
-    responseStatus: ""
+    responseStatus: "",
+    notes: ""
   });
   const [savingHistory, setSavingHistory] = useState(false);
   const [savingPrimaryProspectId, setSavingPrimaryProspectId] = useState<string | null>(null);
   const [savingLeadPriority, setSavingLeadPriority] = useState(false);
+  const [showNoteModal, setShowNoteModal] = useState(false);
   const [noteForm, setNoteForm] = useState<LeadNoteFormState>({
     noteText: "",
     notedAt: "",
@@ -9660,7 +12075,7 @@ function LeadDetailView({
               reason: historyForm.reason || null,
               whoBy: historyForm.whoBy || null,
               responseStatus: historyForm.responseStatus || null,
-              notes: null
+              notes: historyForm.notes || null
             })
           });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -9669,8 +12084,10 @@ function LeadDetailView({
         contactedAt: "",
         reason: "",
         whoBy: "",
-        responseStatus: ""
+        responseStatus: "",
+        notes: ""
       });
+      setShowContactHistoryModal(false);
       setRefreshKey((current) => current + 1);
       onLeadChanged();
     } finally {
@@ -9702,6 +12119,7 @@ function LeadDetailView({
         notedAt: "",
         userId: defaultUserId
       });
+      setShowNoteModal(false);
       setRefreshKey((current) => current + 1);
       onLeadChanged();
     } finally {
@@ -9714,6 +12132,9 @@ function LeadDetailView({
   if (state.error) return <ErrorPanel error={state.error} />;
   if (!state.data) return <EmptyPanel message="Lead not found." />;
   const lead = state.data;
+  const sourceLabel = getLeadSourceLabel(lead);
+  const primaryProspect = lead.prospects.find((prospect) => prospect.isPrimary) ?? lead.prospects[0];
+  const sourceDetailsTitle = lead.customerId ? "Customer Details" : `${sourceLabel} Details`;
 
   return (
     <section className="detail-panel">
@@ -9729,9 +12150,11 @@ function LeadDetailView({
           <p className="mono">Lead #{lead.id}</p>
         </div>
         <div className="panel-actions">
-          <button className="secondary-action" type="button" onClick={() => onOpenCustomer(lead.customerId)}>
-            View Customer
-          </button>
+          {lead.customerId ? (
+            <button className="secondary-action" type="button" onClick={() => onOpenCustomer(lead.customerId!)}>
+              View Customer
+            </button>
+          ) : null}
           <LeadPriorityLights
             value={lead.leadPriority}
             disabled={savingLeadPriority}
@@ -9755,6 +12178,7 @@ function LeadDetailView({
       </div>
       {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
       <div className="detail-grid">
+        <DetailItem label="Source" value={sourceLabel} />
         <DetailItem label="Trading name" value={lead.tradingName} />
         <DetailItem label="Address" value={lead.tradingAddress} />
         <DetailItem label="Postcode" value={lead.postcode} />
@@ -9762,17 +12186,71 @@ function LeadDetailView({
         <DetailItem label="Priority" value={getLeadPriorityLabel(lead.leadPriority)} />
         <DetailItem label="Created" value={formatDateTime(lead.createdAt)} />
       </div>
-      <div className="detail-grid">
-        <CommercialsEditor
-          customerId={state.data.customerId}
-          title="Commercials"
-          value={commercials}
-          customerValueTypes={customerValueTypes}
-          onSaved={(next) => {
-            setCommercials(next);
-            onLeadChanged();
-          }}
-        />
+
+      <div className="detail-grid customer-match-detail-grid">
+        <article className="detail-card">
+          <h4>{sourceDetailsTitle}</h4>
+          <div className="detail-grid compact-grid">
+            <DetailItem label="Source" value={sourceLabel} />
+            {lead.sourceQuoteId ? <DetailItem label="Quote" value={<span className="mono">{lead.sourceQuoteId}</span>} /> : null}
+            {primaryProspect ? <DetailItem label="Prospect" value={<span className="mono">{primaryProspect.prospectId}</span>} /> : null}
+            <DetailItem label="Business" value={lead.customerName} />
+            <DetailItem label="Trading name" value={lead.tradingName} />
+            <DetailItem label="Phone" value={formatUkPhoneNumber(lead.contactPhone)} />
+            <DetailItem label="Email" value={<CopyableEmail email={lead.contactEmail} />} />
+            <DetailItem label="Postcode" value={lead.postcode} />
+          </div>
+        </article>
+
+        <article className="detail-card">
+          <div className="detail-card-title-row">
+            <h4>AI Company Insight</h4>
+            <button className="secondary-action" type="button" onClick={() => onOpenAiCompanyInsight(lead)}>
+              AI Company Insight
+            </button>
+          </div>
+          {lead.aiInsight ? (
+            <div className="ai-insight-stack">
+              <strong>{lead.aiInsight.companyName}</strong>
+              <span>{lead.aiInsight.status || "Unknown status"}</span>
+              {lead.aiInsight.companyNumber ? <span className="mono">{lead.aiInsight.companyNumber}</span> : null}
+              {lead.aiInsight.website ? (
+                <a className="row-link" href={lead.aiInsight.website} target="_blank" rel="noreferrer">
+                  <Globe size={14} aria-hidden /> Main Website <ExternalLink size={12} aria-hidden />
+                </a>
+              ) : null}
+              <span className="muted">Saved {formatDateTime(lead.aiInsight.updatedAt)}</span>
+            </div>
+          ) : (
+            <p className="muted">No saved AI company insight is linked or matched for this {sourceLabel.toLowerCase()} lead.</p>
+          )}
+        </article>
+
+        {lead.customerId ? (
+          <CommercialsEditor
+            customerId={lead.customerId}
+            subject="customer"
+            title="Commercials"
+            value={commercials}
+            customerValueTypes={customerValueTypes}
+            onSaved={(next) => {
+              setCommercials(next);
+              onLeadChanged();
+            }}
+          />
+        ) : (
+          <CommercialsEditor
+            customerId={lead.id}
+            subject="lead"
+            title="Commercials"
+            value={commercials}
+            customerValueTypes={customerValueTypes}
+            onSaved={(next) => {
+              setCommercials(next);
+              onLeadChanged();
+            }}
+          />
+        )}
       </div>
 
       <div className="match-list">
@@ -9817,84 +12295,10 @@ function LeadDetailView({
               <strong>Contact history</strong>
               <div className="muted">{contactEntries.length} contact event{contactEntries.length === 1 ? "" : "s"}</div>
             </div>
+            <button className="secondary-action" type="button" onClick={() => setShowContactHistoryModal(true)}>
+              Add Contact Entry
+            </button>
           </div>
-          <form className="search-form" onSubmit={(event) => void addContactHistory(event)}>
-            <div className="table-search-group">
-              <div className="table-search">
-                <label htmlFor="lead-history-channel">Channel</label>
-                <select
-                  id="lead-history-channel"
-                  className="header-select"
-                  value={historyForm.channel}
-                  onChange={(event) => setHistoryForm((current) => ({ ...current, channel: event.target.value }))}
-                >
-                  <option value="email">Email</option>
-                  <option value="mail">Mail</option>
-                  <option value="phone_call">Phone call</option>
-                  <option value="sms">SMS</option>
-                  <option value="in_person">In person</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
-              <div className="table-search">
-                <label htmlFor="lead-history-contacted-at">Date/time</label>
-                <input
-                  id="lead-history-contacted-at"
-                  type="datetime-local"
-                  value={historyForm.contactedAt}
-                  onChange={(event) => setHistoryForm((current) => ({ ...current, contactedAt: event.target.value }))}
-                />
-              </div>
-              <div className="table-search">
-                <label htmlFor="lead-history-response-status">Response status</label>
-                <select
-                  id="lead-history-response-status"
-                  className="header-select"
-                  value={historyForm.responseStatus}
-                  onChange={(event) => setHistoryForm((current) => ({ ...current, responseStatus: event.target.value }))}
-                >
-                  <option value="">None</option>
-                  <option value="Suppressed">Suppressed</option>
-                  <option value="Scheduled">Scheduled</option>
-                  <option value="Sent">Sent</option>
-                  <option value="Called">Called</option>
-                  <option value="Visited">Visited</option>
-                  <option value="Responded">Responded</option>
-                  <option value="Interested">Interested</option>
-                  <option value="Converted">Converted</option>
-                  <option value="Not interested">Not interested</option>
-                  <option value="Failed">Failed</option>
-                  <option value="Removed">Removed</option>
-                  <option value="Dead Lead">Dead Lead</option>
-                </select>
-              </div>
-            </div>
-            <div className="table-search-group">
-              <div className="table-search">
-                <label htmlFor="lead-history-reason">Reason</label>
-                <input
-                  id="lead-history-reason"
-                  type="text"
-                  value={historyForm.reason}
-                  onChange={(event) => setHistoryForm((current) => ({ ...current, reason: event.target.value }))}
-                />
-              </div>
-              <div className="table-search">
-                <label htmlFor="lead-history-who-by">Who by</label>
-                <input
-                  id="lead-history-who-by"
-                  type="text"
-                  value={historyForm.whoBy}
-                  onChange={(event) => setHistoryForm((current) => ({ ...current, whoBy: event.target.value }))}
-                />
-              </div>
-            </div>
-            <div className="page-actions">
-              <button className="secondary-action" type="submit" disabled={savingHistory}>
-                {savingHistory ? "Saving..." : "Add Contact Entry"}
-              </button>
-            </div>
-          </form>
           {contactEntries.length ? (
             <div className="match-card-grid">
               {contactEntries.map((entry) => (
@@ -9913,56 +12317,46 @@ function LeadDetailView({
           )}
         </article>
 
+        {Boolean(telesalesHistoryState.data?.length) && (
+          <article className="match-card">
+            <div className="match-card-header">
+              <div>
+                <strong>Telesales contact history</strong>
+                <div className="muted">{telesalesHistoryState.data!.length} Telesales event{telesalesHistoryState.data!.length === 1 ? "" : "s"}</div>
+              </div>
+            </div>
+            <ol className="interaction-timeline">
+              {telesalesHistoryState.data!.map((interaction, index) => (
+                <li className="interaction-timeline-item" key={`${interaction.occurredAt}-${interaction.activityType}-${index}`}>
+                  <div className="interaction-timeline-marker" aria-hidden="true" />
+                  <div className="interaction-timeline-content">
+                    <div className="interaction-timeline-header">
+                      <strong>{interaction.title}</strong>
+                      <span>{formatDateTime(interaction.occurredAt)}</span>
+                    </div>
+                    <div className="interaction-timeline-meta">
+                      <span>{interaction.activityType}</span>
+                      {interaction.telesaleUser && <span>{interaction.telesaleUser}</span>}
+                      {interaction.waveName && <span>{interaction.campaignName ? `${interaction.campaignName} / ${interaction.waveName}` : interaction.waveName}</span>}
+                    </div>
+                    {interaction.details && <p>{interaction.details}</p>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </article>
+        )}
+
         <article className="match-card">
           <div className="match-card-header">
             <div>
               <strong>Notes</strong>
               <div className="muted">{noteEntries.length} note{noteEntries.length === 1 ? "" : "s"}</div>
             </div>
+            <button className="secondary-action" type="button" onClick={() => setShowNoteModal(true)}>
+              Add Note
+            </button>
           </div>
-          <form className="search-form" onSubmit={(event) => void addLeadNote(event)}>
-            <div className="table-search-group">
-              <div className="table-search">
-                <label htmlFor="lead-note-user">User</label>
-                <select
-                  id="lead-note-user"
-                  className="header-select"
-                  value={noteForm.userId}
-                  onChange={(event) => setNoteForm((current) => ({ ...current, userId: event.target.value }))}
-                >
-                  <option value="">None</option>
-                  {users.map((user) => (
-                    <option key={user.id} value={String(user.id)}>
-                      {user.fullName}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="table-search">
-                <label htmlFor="lead-note-noted-at">Date/time</label>
-                <input
-                  id="lead-note-noted-at"
-                  type="datetime-local"
-                  value={noteForm.notedAt}
-                  onChange={(event) => setNoteForm((current) => ({ ...current, notedAt: event.target.value }))}
-                />
-              </div>
-            </div>
-            <div className="table-search">
-              <label htmlFor="lead-note-text">Note</label>
-              <textarea
-                id="lead-note-text"
-                rows={5}
-                value={noteForm.noteText}
-                onChange={(event) => setNoteForm((current) => ({ ...current, noteText: event.target.value }))}
-              />
-            </div>
-            <div className="page-actions">
-              <button className="secondary-action" type="submit" disabled={savingNote || !noteForm.noteText.trim()}>
-                {savingNote ? "Saving..." : "Add Note"}
-              </button>
-            </div>
-          </form>
           {noteEntries.length ? (
             <div className="match-card-grid">
               {noteEntries.map((entry) => (
@@ -9978,6 +12372,166 @@ function LeadDetailView({
           )}
         </article>
       </div>
+      {showNoteModal && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel wave-contact-history-modal" aria-modal="true" aria-labelledby="lead-detail-note-title" role="dialog">
+            <div className="modal-header">
+              <div>
+                <span className="eyebrow">Lead</span>
+                <h3 id="lead-detail-note-title">Add Note</h3>
+                <p>Lead #{lead.id} - {lead.customerName}</p>
+              </div>
+              <button className="modal-close" type="button" onClick={() => setShowNoteModal(false)}>
+                Close
+              </button>
+            </div>
+            <form className="modal-body wave-contact-history-form" onSubmit={(event) => void addLeadNote(event)}>
+              <div className="table-search-group">
+                <div className="table-search">
+                  <label htmlFor="lead-note-user">User</label>
+                  <select
+                    id="lead-note-user"
+                    className="header-select"
+                    value={noteForm.userId}
+                    onChange={(event) => setNoteForm((current) => ({ ...current, userId: event.target.value }))}
+                  >
+                    <option value="">None</option>
+                    {users.map((user) => (
+                      <option key={user.id} value={String(user.id)}>
+                        {user.fullName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="table-search">
+                  <label htmlFor="lead-note-noted-at">Date/time</label>
+                  <input
+                    id="lead-note-noted-at"
+                    type="datetime-local"
+                    value={noteForm.notedAt}
+                    onChange={(event) => setNoteForm((current) => ({ ...current, notedAt: event.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="table-search">
+                <label htmlFor="lead-note-text">Note</label>
+                <textarea
+                  id="lead-note-text"
+                  rows={5}
+                  value={noteForm.noteText}
+                  onChange={(event) => setNoteForm((current) => ({ ...current, noteText: event.target.value }))}
+                />
+              </div>
+              <div className="modal-actions">
+                <button className="secondary-action" type="button" onClick={() => setShowNoteModal(false)}>
+                  Cancel
+                </button>
+                <button className="page-action-button" type="submit" disabled={savingNote || !noteForm.noteText.trim()}>
+                  {savingNote ? "Saving..." : "Add Note"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+      {showContactHistoryModal && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel wave-contact-history-modal" aria-modal="true" aria-labelledby="lead-detail-contact-history-title" role="dialog">
+            <div className="modal-header">
+              <div>
+                <span className="eyebrow">Lead</span>
+                <h3 id="lead-detail-contact-history-title">Add Contact History</h3>
+                <p>Lead #{lead.id} - {lead.customerName}</p>
+              </div>
+              <button className="modal-close" type="button" onClick={() => setShowContactHistoryModal(false)}>
+                Close
+              </button>
+            </div>
+            <form className="modal-body wave-contact-history-form" onSubmit={(event) => void addContactHistory(event)}>
+              <div className="table-search-group">
+                <div className="table-search">
+                  <label htmlFor="lead-history-channel">Channel</label>
+                  <select
+                    id="lead-history-channel"
+                    className="header-select"
+                    value={historyForm.channel}
+                    onChange={(event) => setHistoryForm((current) => ({ ...current, channel: event.target.value }))}
+                  >
+                    <option value="email">Email</option>
+                    <option value="mail">Mail</option>
+                    <option value="phone_call">Phone call</option>
+                    <option value="sms">SMS</option>
+                    <option value="in_person">In person</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div className="table-search">
+                  <label htmlFor="lead-history-contacted-at">Date/time</label>
+                  <input
+                    id="lead-history-contacted-at"
+                    type="datetime-local"
+                    value={historyForm.contactedAt}
+                    onChange={(event) => setHistoryForm((current) => ({ ...current, contactedAt: event.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="table-search">
+                <label htmlFor="lead-history-response-status">Response status</label>
+                <select
+                  id="lead-history-response-status"
+                  className="header-select"
+                  value={historyForm.responseStatus}
+                  onChange={(event) => setHistoryForm((current) => ({ ...current, responseStatus: event.target.value }))}
+                >
+                  <option value="">None</option>
+                  {responseStatuses.map((status) => (
+                    <option key={status.id} value={status.name}>
+                      {status.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="table-search-group">
+                <div className="table-search">
+                  <label htmlFor="lead-history-reason">Reason</label>
+                  <input
+                    id="lead-history-reason"
+                    type="text"
+                    value={historyForm.reason}
+                    onChange={(event) => setHistoryForm((current) => ({ ...current, reason: event.target.value }))}
+                  />
+                </div>
+                <div className="table-search">
+                  <label htmlFor="lead-history-who-by">Who by</label>
+                  <input
+                    id="lead-history-who-by"
+                    type="text"
+                    value={historyForm.whoBy}
+                    onChange={(event) => setHistoryForm((current) => ({ ...current, whoBy: event.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="table-search">
+                <label htmlFor="lead-history-notes">Notes</label>
+                <textarea
+                  id="lead-history-notes"
+                  rows={4}
+                  value={historyForm.notes}
+                  onChange={(event) => setHistoryForm((current) => ({ ...current, notes: event.target.value }))}
+                />
+              </div>
+              <div className="modal-actions">
+                <button className="secondary-action" type="button" onClick={() => setShowContactHistoryModal(false)}>
+                  Cancel
+                </button>
+                <button className="page-action-button" type="submit" disabled={savingHistory}>
+                  {savingHistory ? "Saving..." : "Add Contact Entry"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
     </section>
   );
 }
@@ -10090,6 +12644,10 @@ function UsersView({
   const [submitting, setSubmitting] = useState(false);
   const [savingColorUserId, setSavingColorUserId] = useState<number | null>(null);
   const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+  const [editingUserId, setEditingUserId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState<UserFormState>({ fullName: "", initials: "", phone: "", email: "", color: userColorOptions[0].value, userType: "", username: "", password: "" });
+  const [passwordByUserId, setPasswordByUserId] = useState<Record<number, string>>({});
+  const [savingUserId, setSavingUserId] = useState<number | null>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -10107,7 +12665,7 @@ function UsersView({
         throw new Error(payload?.error ?? `HTTP ${response.status}`);
       }
 
-      onFormChange({ fullName: "", initials: "", phone: "", email: "", color: userColorOptions[0].value });
+      onFormChange({ fullName: "", initials: "", phone: "", email: "", color: userColorOptions[0].value, userType: "", username: "", password: "" });
       setNotice({ kind: "success", message: "User added." });
       onDataChanged();
     } catch (error) {
@@ -10144,6 +12702,106 @@ function UsersView({
       });
     } finally {
       setSavingColorUserId(null);
+    }
+  }
+
+  function startEditUser(user: User) {
+    setEditingUserId(user.id);
+    setEditForm({
+      fullName: user.fullName,
+      initials: user.initials,
+      phone: user.phone ?? "",
+      email: user.email ?? "",
+      color: user.color ?? userColorOptions[0].value,
+      userType: user.userType ?? "",
+      username: user.username ?? "",
+      password: ""
+    });
+    setNotice(null);
+  }
+
+  async function saveUser(user: User) {
+    setSavingUserId(user.id);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editForm)
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setEditingUserId(null);
+      setNotice({ kind: "success", message: `${editForm.fullName} updated.` });
+      onDataChanged();
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not update user."
+      });
+    } finally {
+      setSavingUserId(null);
+    }
+  }
+
+  async function saveTelesalePassword(user: User) {
+    const password = passwordByUserId[user.id] ?? "";
+    setSavingUserId(user.id);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/users/${user.id}/password`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setPasswordByUserId((current) => ({ ...current, [user.id]: "" }));
+      setNotice({ kind: "success", message: `${user.fullName}'s password updated.` });
+      onDataChanged();
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not update password."
+      });
+    } finally {
+      setSavingUserId(null);
+    }
+  }
+
+  async function deleteUser(user: User) {
+    const confirmed = window.confirm(`Delete ${user.fullName}?`);
+    if (!confirmed) return;
+
+    setSavingUserId(user.id);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/users/${user.id}`, {
+        method: "DELETE"
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setNotice({ kind: "success", message: `${user.fullName} deleted.` });
+      onDataChanged();
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not delete user."
+      });
+    } finally {
+      setSavingUserId(null);
     }
   }
 
@@ -10207,6 +12865,41 @@ function UsersView({
               ))}
             </select>
           </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="user-type">Type</label>
+            <select
+              id="user-type"
+              className="header-select"
+              value={form.userType}
+              onChange={(event) => onFormChange((current) => ({ ...current, userType: event.target.value, username: event.target.value === "Telesale" ? current.username : "" }))}
+            >
+              <option value="">None</option>
+              <option value="External">External</option>
+              <option value="Telesale">Telesale</option>
+            </select>
+          </div>
+          {form.userType === "Telesale" && (
+            <div className="table-search">
+              <label htmlFor="user-username">Username</label>
+              <input
+                id="user-username"
+                type="text"
+                value={form.username}
+                onChange={(event) => onFormChange((current) => ({ ...current, username: event.target.value.replace(/\s/g, "") }))}
+                placeholder="No spaces"
+              />
+            </div>
+          )}
+          <div className="table-search">
+            <label htmlFor="user-password">Password</label>
+            <input
+              id="user-password"
+              type="password"
+              value={form.password}
+              onChange={(event) => onFormChange((current) => ({ ...current, password: event.target.value }))}
+              placeholder={form.userType === "Telesale" ? "Defaults to makemoney99$" : "Optional"}
+            />
+          </div>
         </div>
         <div className="page-actions">
           <button className="page-action-button" type="submit" disabled={submitting}>
@@ -10218,22 +12911,87 @@ function UsersView({
       <DataTable
         state={state}
         emptyMessage="No users added yet."
-        columns={["Created", "Name", "Initials", "Phone", "Email", "Colour"]}
+        columns={["Created", "Name", "Initials", "Phone", "Email", "Type", "Username", "Password", "Colour", "Actions"]}
         renderRow={(row) => (
           <tr key={row.id}>
             <td>{formatDateTime(row.createdAt)}</td>
-            <td>{row.fullName}</td>
-            <td className="mono">{row.initials}</td>
-            <td>{row.phone ?? ""}</td>
-            <td>{row.email ?? ""}</td>
+            {editingUserId === row.id ? (
+              <>
+                <td>
+                  <input className="table-inline-input" type="text" value={editForm.fullName} onChange={(event) => setEditForm((current) => ({ ...current, fullName: event.target.value }))} />
+                </td>
+                <td>
+                  <input className="table-inline-input table-inline-input-small" type="text" value={editForm.initials} onChange={(event) => setEditForm((current) => ({ ...current, initials: event.target.value }))} />
+                </td>
+                <td>
+                  <input className="table-inline-input" type="text" value={editForm.phone} onChange={(event) => setEditForm((current) => ({ ...current, phone: event.target.value }))} />
+                </td>
+                <td>
+                  <input className="table-inline-input" type="email" value={editForm.email} onChange={(event) => setEditForm((current) => ({ ...current, email: event.target.value }))} />
+                </td>
+                <td>
+                  <select className="header-select" value={editForm.userType} onChange={(event) => setEditForm((current) => ({ ...current, userType: event.target.value, username: event.target.value === "Telesale" ? current.username : "" }))}>
+                    <option value="">None</option>
+                    <option value="External">External</option>
+                    <option value="Telesale">Telesale</option>
+                  </select>
+                </td>
+                <td>
+                  {editForm.userType === "Telesale" ? (
+                    <input className="table-inline-input table-inline-input-small" type="text" value={editForm.username} onChange={(event) => setEditForm((current) => ({ ...current, username: event.target.value.replace(/\s/g, "") }))} />
+                  ) : ""}
+                </td>
+                <td>{row.hasPassword ? "Set" : ""}</td>
+              </>
+            ) : (
+              <>
+                <td>{row.fullName}</td>
+                <td className="mono">{row.initials}</td>
+                <td>{row.phone ?? ""}</td>
+                <td>{row.email ?? ""}</td>
+                <td>{row.userType ?? ""}</td>
+                <td className="mono">{row.username ?? ""}</td>
+                <td>
+                  {row.userType === "Telesale" ? (
+                    <div className="user-password-cell">
+                      <span className="mono">{row.telesalePassword ?? ""}</span>
+                      <div className="row-action-menu-inline-actions">
+                      <input
+                        className="table-inline-input"
+                        type="text"
+                        value={passwordByUserId[row.id] ?? ""}
+                        onChange={(event) => setPasswordByUserId((current) => ({ ...current, [row.id]: event.target.value }))}
+                        placeholder="New password"
+                      />
+                      <button
+                        className="secondary-action"
+                        type="button"
+                        disabled={savingUserId === row.id || !(passwordByUserId[row.id] ?? "").trim()}
+                        onClick={() => void saveTelesalePassword(row)}
+                      >
+                        Set
+                      </button>
+                      </div>
+                    </div>
+                  ) : row.hasPassword ? "Set" : ""}
+                </td>
+              </>
+            )}
             <td>
               <div className="user-color-cell">
                 <span className="bookmark-dot user-color-preview" aria-hidden style={{ backgroundColor: row.color ?? "#111111" }} />
                 <select
                   className="header-select"
-                  value={row.color ?? userColorOptions[0].value}
+                  value={editingUserId === row.id ? editForm.color : row.color ?? userColorOptions[0].value}
                   disabled={savingColorUserId === row.id}
-                  onChange={(event) => void updateUserColor(row, event.target.value)}
+                  onChange={(event) => {
+                    if (editingUserId === row.id) {
+                      setEditForm((current) => ({ ...current, color: event.target.value }));
+                      return;
+                    }
+
+                    void updateUserColor(row, event.target.value);
+                  }}
                 >
                   {userColorOptions.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -10242,6 +13000,27 @@ function UsersView({
                   ))}
                 </select>
               </div>
+            </td>
+            <td>
+              {editingUserId === row.id ? (
+                <div className="row-action-menu-inline-actions">
+                  <button className="page-action-button" type="button" disabled={savingUserId === row.id} onClick={() => void saveUser(row)}>
+                    Save
+                  </button>
+                  <button className="secondary-action" type="button" disabled={savingUserId === row.id} onClick={() => setEditingUserId(null)}>
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="row-action-menu-inline-actions">
+                  <button className="secondary-action" type="button" disabled={savingUserId === row.id} onClick={() => startEditUser(row)}>
+                    Edit
+                  </button>
+                  <button className="secondary-action destructive-action" type="button" disabled={savingUserId === row.id} onClick={() => void deleteUser(row)}>
+                    Delete
+                  </button>
+                </div>
+              )}
             </td>
           </tr>
         )}
@@ -11236,17 +14015,1141 @@ function LeadStatusesView({
   );
 }
 
+function ResponseStatusesView({
+  state,
+  form,
+  onFormChange,
+  onDataChanged
+}: {
+  state: LoadState<ResponseStatusOption[]>;
+  form: ResponseStatusFormState;
+  onFormChange: Dispatch<SetStateAction<ResponseStatusFormState>>;
+  onDataChanged: () => void;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [editingSortOrder, setEditingSortOrder] = useState("");
+  const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/response-statuses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.name,
+          sortOrder: form.sortOrder.trim() ? Number(form.sortOrder) : null
+        })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      onFormChange({ name: "", sortOrder: "" });
+      setNotice({ kind: "success", message: "Response status added." });
+      onDataChanged();
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not add response status."
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function saveEdit(responseStatusId: number) {
+    setSubmitting(true);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/response-statuses/${responseStatusId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editingName,
+          sortOrder: editingSortOrder.trim() ? Number(editingSortOrder) : null
+        })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setEditingId(null);
+      setEditingName("");
+      setEditingSortOrder("");
+      setNotice({ kind: "success", message: "Response status updated." });
+      onDataChanged();
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not update response status."
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="test-page">
+      <form className="search-form" onSubmit={(event) => void submit(event)}>
+        <div className="table-search-group">
+          <div className="table-search">
+            <label htmlFor="response-status-name">Response status name</label>
+            <input
+              id="response-status-name"
+              type="text"
+              value={form.name}
+              onChange={(event) => onFormChange((current) => ({ ...current, name: event.target.value }))}
+              placeholder="Responded"
+            />
+          </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="response-status-sort-order">Sort order</label>
+            <input
+              id="response-status-sort-order"
+              type="number"
+              value={form.sortOrder}
+              onChange={(event) => onFormChange((current) => ({ ...current, sortOrder: event.target.value }))}
+              placeholder="60"
+            />
+          </div>
+        </div>
+        <div className="page-actions">
+          <button className="page-action-button" type="submit" disabled={submitting}>
+            {submitting ? "Saving..." : "Add response status"}
+          </button>
+        </div>
+      </form>
+      {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
+      <DataTable
+        state={state}
+        emptyMessage="No response statuses added yet."
+        columns={["Created", "Response status", "Sort", "Updated", "Action"]}
+        renderRow={(row) => (
+          <tr key={row.id}>
+            <td>{formatDateTime(row.createdAt)}</td>
+            <td>
+              {editingId === row.id ? (
+                <input
+                  type="text"
+                  value={editingName}
+                  onChange={(event) => setEditingName(event.target.value)}
+                  className="inline-table-input"
+                />
+              ) : (
+                row.name
+              )}
+            </td>
+            <td>
+              {editingId === row.id ? (
+                <input
+                  type="number"
+                  value={editingSortOrder}
+                  onChange={(event) => setEditingSortOrder(event.target.value)}
+                  className="inline-table-input inline-table-input-small"
+                />
+              ) : (
+                row.sortOrder
+              )}
+            </td>
+            <td>{formatDateTime(row.updatedAt)}</td>
+            <td>
+              {editingId === row.id ? (
+                <div className="row-actions">
+                  <button className="details-button" type="button" disabled={submitting} onClick={() => void saveEdit(row.id)}>
+                    Save
+                  </button>
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => {
+                      setEditingId(null);
+                      setEditingName("");
+                      setEditingSortOrder("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="details-button"
+                  type="button"
+                  onClick={() => {
+                    setEditingId(row.id);
+                    setEditingName(row.name);
+                    setEditingSortOrder(String(row.sortOrder));
+                  }}
+                >
+                  Edit
+                </button>
+              )}
+            </td>
+          </tr>
+        )}
+      />
+    </div>
+  );
+}
+
+function CalendarEntryTypesView({
+  state,
+  form,
+  onFormChange,
+  onDataChanged
+}: {
+  state: LoadState<CalendarEntryType[]>;
+  form: CalendarEntryTypeFormState;
+  onFormChange: Dispatch<SetStateAction<CalendarEntryTypeFormState>>;
+  onDataChanged: () => void;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingForm, setEditingForm] = useState<CalendarEntryTypeFormState | null>(null);
+  const [editingActive, setEditingActive] = useState(true);
+  const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/calendar-entry-types`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: form.label,
+          shouldNotifyUser: form.shouldNotifyUser,
+          priority: form.priority,
+          overduePriority: form.overduePriority,
+          sortOrder: form.sortOrder.trim() ? Number(form.sortOrder) : null
+        })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      onFormChange({ label: "", shouldNotifyUser: false, priority: "medium", overduePriority: "high", sortOrder: "" });
+      setNotice({ kind: "success", message: "Calendar entry type added." });
+      onDataChanged();
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not add calendar entry type."
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function saveEdit(calendarEntryTypeId: number) {
+    if (!editingForm) return;
+    setSubmitting(true);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/calendar-entry-types/${calendarEntryTypeId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: editingForm.label,
+          shouldNotifyUser: editingForm.shouldNotifyUser,
+          priority: editingForm.priority,
+          overduePriority: editingForm.overduePriority,
+          isActive: editingActive,
+          sortOrder: editingForm.sortOrder.trim() ? Number(editingForm.sortOrder) : null
+        })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setEditingId(null);
+      setEditingForm(null);
+      setNotice({ kind: "success", message: "Calendar entry type updated." });
+      onDataChanged();
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not update calendar entry type."
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const prioritySelect = (
+    value: LeadPriority,
+    onChange: (next: LeadPriority) => void,
+    label: string
+  ) => (
+    <select aria-label={label} className="table-inline-input" value={value} onChange={(event) => onChange(event.target.value as LeadPriority)}>
+      {leadPriorityOrder.map((priority) => (
+        <option key={priority} value={priority}>{getLeadPriorityLabel(priority)}</option>
+      ))}
+    </select>
+  );
+
+  return (
+    <div className="test-page">
+      <form className="search-form" onSubmit={(event) => void submit(event)}>
+        <div className="table-search-group">
+          <div className="table-search">
+            <label htmlFor="calendar-type-label">Label</label>
+            <input id="calendar-type-label" value={form.label} onChange={(event) => onFormChange((current) => ({ ...current, label: event.target.value }))} placeholder="Review meeting" />
+          </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="calendar-type-priority">Priority</label>
+            <select id="calendar-type-priority" value={form.priority} onChange={(event) => onFormChange((current) => ({ ...current, priority: event.target.value as LeadPriority }))}>
+              {leadPriorityOrder.map((priority) => <option key={priority} value={priority}>{getLeadPriorityLabel(priority)}</option>)}
+            </select>
+          </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="calendar-type-overdue-priority">Overdue priority</label>
+            <select id="calendar-type-overdue-priority" value={form.overduePriority} onChange={(event) => onFormChange((current) => ({ ...current, overduePriority: event.target.value as LeadPriority }))}>
+              {leadPriorityOrder.map((priority) => <option key={priority} value={priority}>{getLeadPriorityLabel(priority)}</option>)}
+            </select>
+          </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="calendar-type-sort">Sort</label>
+            <input id="calendar-type-sort" type="number" value={form.sortOrder} onChange={(event) => onFormChange((current) => ({ ...current, sortOrder: event.target.value }))} placeholder="50" />
+          </div>
+          <label className="table-filter-select calendar-notify-toggle">
+            <span>Notify user</span>
+            <input type="checkbox" checked={form.shouldNotifyUser} onChange={(event) => onFormChange((current) => ({ ...current, shouldNotifyUser: event.target.checked }))} />
+          </label>
+        </div>
+        <div className="page-actions">
+          <button className="page-action-button" type="submit" disabled={submitting}>
+            {submitting ? "Saving..." : "Add calendar entry type"}
+          </button>
+        </div>
+      </form>
+      {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
+      <DataTable
+        state={state}
+        emptyMessage="No calendar entry types added yet."
+        columns={["Label", "Notify", "Priority", "Overdue", "Sort", "Active", "Updated", "Action"]}
+        renderRow={(row) => {
+          const isEditing = editingId === row.id && editingForm;
+          return (
+            <tr key={row.id}>
+              <td>{isEditing ? <input className="table-inline-input" value={editingForm.label} onChange={(event) => setEditingForm({ ...editingForm, label: event.target.value })} /> : row.label}</td>
+              <td>
+                {isEditing ? (
+                  <input type="checkbox" checked={editingForm.shouldNotifyUser} onChange={(event) => setEditingForm({ ...editingForm, shouldNotifyUser: event.target.checked })} />
+                ) : row.shouldNotifyUser ? "Yes" : "No"}
+              </td>
+              <td>{isEditing ? prioritySelect(editingForm.priority, (priority) => setEditingForm({ ...editingForm, priority }), "Priority") : getLeadPriorityLabel(row.priority)}</td>
+              <td>{isEditing ? prioritySelect(editingForm.overduePriority, (overduePriority) => setEditingForm({ ...editingForm, overduePriority }), "Overdue priority") : getLeadPriorityLabel(row.overduePriority)}</td>
+              <td>{isEditing ? <input className="table-inline-input table-inline-input-small" type="number" value={editingForm.sortOrder} onChange={(event) => setEditingForm({ ...editingForm, sortOrder: event.target.value })} /> : row.sortOrder}</td>
+              <td>
+                {isEditing ? (
+                  <input type="checkbox" checked={editingActive} onChange={(event) => setEditingActive(event.target.checked)} />
+                ) : row.isActive ? "Yes" : "No"}
+              </td>
+              <td>{formatDateTime(row.updatedAt)}</td>
+              <td>
+                {isEditing ? (
+                  <div className="row-actions">
+                    <button className="details-button" type="button" disabled={submitting} onClick={() => void saveEdit(row.id)}>Save</button>
+                    <button className="secondary-action" type="button" disabled={submitting} onClick={() => { setEditingId(null); setEditingForm(null); }}>Cancel</button>
+                  </div>
+                ) : (
+                  <button
+                    className="details-button"
+                    type="button"
+                    onClick={() => {
+                      setEditingId(row.id);
+                      setEditingActive(row.isActive);
+                      setEditingForm({
+                        label: row.label,
+                        shouldNotifyUser: row.shouldNotifyUser,
+                        priority: row.priority,
+                        overduePriority: row.overduePriority,
+                        sortOrder: String(row.sortOrder)
+                      });
+                    }}
+                  >
+                    Edit
+                  </button>
+                )}
+              </td>
+            </tr>
+          );
+        }}
+      />
+    </div>
+  );
+}
+
+function CalendarView({
+  scope,
+  users,
+  entryTypes,
+  campaigns,
+  currentUserId,
+  onOpenSource
+}: {
+  scope: "user" | "system";
+  users: User[];
+  entryTypes: CalendarEntryType[];
+  campaigns: Campaign[];
+  currentUserId: string;
+  onOpenSource?: (source: CalendarSourceNavigation) => void;
+}) {
+  const today = new Date();
+  const activeUsers = useMemo(
+    () => users.filter((user) => user.userType !== "Telesale"),
+    [users]
+  );
+  const [mode, setMode] = useState<CalendarMode>("week");
+  const [selectedUserId, setSelectedUserId] = useState(scope === "user" ? currentUserId : "");
+  const [fromDate, setFromDate] = useState(() => toDateInput(startOfWeek(today)));
+  const [toDate, setToDate] = useState(() => toDateInput(addDays(startOfWeek(today), 6)));
+  const [searchText, setSearchText] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [notice, setNotice] = useState<ArchiveNotice | null>(null);
+  const [calendarModal, setCalendarModal] = useState<CalendarEntryModalState | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const activeEntryTypes = entryTypes.filter((type) => type.isActive);
+  const defaultType = activeEntryTypes[0];
+
+  useEffect(() => {
+    if (scope === "user" && currentUserId && !selectedUserId) {
+      setSelectedUserId(currentUserId);
+    }
+  }, [currentUserId, scope, selectedUserId]);
+
+  function getDefaultOwnerUserIds(userIdOverride?: number) {
+    if (scope === "system") return {};
+    if (userIdOverride) return { [userIdOverride]: true };
+    if (selectedUserId && selectedUserId !== "all") return { [selectedUserId]: true };
+    if (currentUserId) return { [currentUserId]: true };
+    return {};
+  }
+
+  function openCreateModal(start?: Date, userId?: number) {
+    const startDate = start ?? new Date();
+    const endDate = new Date(startDate);
+    endDate.setMinutes(endDate.getMinutes() + 30);
+    setNotice(null);
+    setCalendarModal({
+      mode: "create",
+      draft: {
+        title: "",
+        description: "",
+        calendarEntryTypeId: defaultType ? String(defaultType.id) : "",
+        startsAt: toDateTimeLocalInput(startDate),
+        endsAt: toDateTimeLocalInput(endDate),
+        ownerUserIds: getDefaultOwnerUserIds(userId)
+      }
+    });
+  }
+
+  function openEditModal(entry: CalendarEntry) {
+    if (entry.id <= 0) {
+      setNotice({ kind: "error", message: "Campaign and wave calendar items are read-only here." });
+      return;
+    }
+
+    setNotice(null);
+    const typeId = entry.entryTypeCode.startsWith("calendar_type_") ? entry.entryTypeCode.replace("calendar_type_", "") : "";
+    const ownerIds = entry.participantUserIds.length
+      ? Object.fromEntries(entry.participantUserIds.map((id) => [String(id), true]))
+      : entry.ownerUserId ? { [entry.ownerUserId]: true } : getDefaultOwnerUserIds();
+    setCalendarModal({
+      mode: "edit",
+      entry,
+      draft: {
+        id: entry.id,
+        title: entry.title,
+        description: entry.description ?? "",
+        calendarEntryTypeId: typeId,
+        startsAt: toDateTimeLocalInput(new Date(entry.startsAt ?? entry.createdAt)),
+        endsAt: entry.endsAt ? toDateTimeLocalInput(new Date(entry.endsAt)) : "",
+        ownerUserIds: ownerIds
+      }
+    });
+  }
+
+  function setModeRange(nextMode: CalendarMode) {
+    setMode(nextMode);
+    const base = fromDate ? parseDateInput(fromDate) : new Date();
+    if (nextMode === "day") {
+      setFromDate(toDateInput(base));
+      setToDate(toDateInput(base));
+    } else if (nextMode === "week") {
+      const start = startOfWeek(base);
+      setFromDate(toDateInput(start));
+      setToDate(toDateInput(addDays(start, 6)));
+    } else if (nextMode === "month") {
+      setFromDate(toDateInput(new Date(base.getFullYear(), base.getMonth(), 1)));
+      setToDate(toDateInput(new Date(base.getFullYear(), base.getMonth() + 1, 0)));
+    } else {
+      setFromDate(toDateInput(new Date(base.getFullYear(), 0, 1)));
+      setToDate(toDateInput(new Date(base.getFullYear(), 11, 31)));
+    }
+  }
+
+  const calendarPath = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set("scope", scope);
+    params.set("includeAllUsers", selectedUserId === "all" || scope === "system" ? "true" : "false");
+    if (scope === "user" && selectedUserId && selectedUserId !== "all") params.set("userId", selectedUserId);
+    if (fromDate) params.set("from", `${fromDate}T00:00:00`);
+    if (toDate) params.set("to", `${toDate}T23:59:59`);
+    if (searchText.trim()) params.set("search", searchText.trim());
+    params.set("limit", "1000");
+    return `/api/calendar-entries?${params.toString()}`;
+  }, [fromDate, scope, searchText, selectedUserId, toDate]);
+  const calendarEntries = useApi<CalendarEntry[]>(calendarPath, refreshKey, currentUserId);
+  const campaignEntries = useMemo(
+    () => buildCampaignCalendarEntries(campaigns, fromDate, toDate, searchText),
+    [campaigns, fromDate, searchText, toDate]
+  );
+  const entries = useMemo(
+    () => [...(calendarEntries.data ?? []), ...campaignEntries]
+      .sort((left, right) => new Date(left.startsAt ?? left.createdAt).getTime() - new Date(right.startsAt ?? right.createdAt).getTime()),
+    [calendarEntries.data, campaignEntries]
+  );
+  const groupedEntries = useMemo(() => groupCalendarEntries(entries, mode), [entries, mode]);
+  const selectedOwnerIds = Object.entries(calendarModal?.draft.ownerUserIds ?? {})
+    .filter(([, selected]) => selected)
+    .map(([id]) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+
+  async function submitCalendarEntry(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!calendarModal) return;
+    setNotice(null);
+    setSubmitting(true);
+    const draft = calendarModal.draft;
+
+    try {
+      if (!draft.startsAt || !hasCalendarTime(draft.startsAt)) {
+        throw new Error("Day calendar entries need a start time.");
+      }
+
+      const response = await fetchWithActor(`${apiBase}/api/calendar-entries${calendarModal.mode === "edit" && draft.id ? `/${draft.id}` : ""}`, {
+        method: calendarModal.mode === "edit" ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          calendarEntryTypeId: draft.calendarEntryTypeId ? Number(draft.calendarEntryTypeId) : defaultType?.id,
+          title: draft.title,
+          description: draft.description,
+          scope,
+          startsAt: draft.startsAt,
+          endsAt: draft.endsAt || null,
+          ownerUserIds: scope === "user" ? selectedOwnerIds : []
+        })
+      }, currentUserId);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setNotice({ kind: "success", message: calendarModal.mode === "edit" ? "Calendar entry updated." : "Calendar entry added." });
+      setCalendarModal(null);
+      setRefreshKey((current) => current + 1);
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not add calendar entry."
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function moveCalendarEntry(entry: CalendarEntry, startsAt: Date, ownerUserId?: number) {
+    if (entry.id <= 0) {
+      setNotice({ kind: "error", message: "Campaign and wave calendar items are read-only here." });
+      return;
+    }
+
+    const currentStart = new Date(entry.startsAt ?? entry.createdAt);
+    const currentEnd = entry.endsAt ? new Date(entry.endsAt) : new Date(currentStart.getTime() + 30 * 60 * 1000);
+    const durationMs = Math.max(15 * 60 * 1000, currentEnd.getTime() - currentStart.getTime());
+    const endsAt = new Date(startsAt.getTime() + durationMs);
+    const ownerIds = ownerUserId
+      ? [ownerUserId]
+      : entry.participantUserIds.length ? entry.participantUserIds : entry.ownerUserId ? [entry.ownerUserId] : [];
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/calendar-entries/${entry.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          calendarEntryTypeId: entry.entryTypeCode.startsWith("calendar_type_") ? Number(entry.entryTypeCode.replace("calendar_type_", "")) : defaultType?.id,
+          title: entry.title,
+          description: entry.description ?? "",
+          scope,
+          startsAt: toDateTimeLocalInput(startsAt),
+          endsAt: toDateTimeLocalInput(endsAt),
+          ownerUserIds: scope === "user" ? ownerIds : []
+        })
+      }, currentUserId);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      setRefreshKey((current) => current + 1);
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Could not move calendar entry." });
+    }
+  }
+
+  return (
+    <div className="test-page calendar-page">
+      <section className="search-form calendar-toolbar">
+        <div className="table-search-group">
+          {scope === "user" && (
+            <div className="table-search table-search-compact">
+              <label htmlFor="calendar-user">User</label>
+              <select id="calendar-user" value={selectedUserId || "all"} onChange={(event) => setSelectedUserId(event.target.value)}>
+                <option value="all">All Users</option>
+                {activeUsers.map((user) => (
+                  <option key={user.id} value={user.id}>{user.fullName}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="table-search table-search-compact">
+            <label htmlFor="calendar-from">From</label>
+            <input
+              id="calendar-from"
+              type="date"
+              value={fromDate}
+              onChange={(event) => {
+                setFromDate(event.target.value);
+                if (mode === "day") {
+                  setToDate(event.target.value);
+                }
+              }}
+            />
+          </div>
+          <div className={mode === "day" ? "table-search table-search-compact hidden-control" : "table-search table-search-compact"}>
+            <label htmlFor="calendar-to">To</label>
+            <input id="calendar-to" type="date" value={mode === "day" ? fromDate : toDate} onChange={(event) => setToDate(event.target.value)} />
+          </div>
+          <div className="table-search">
+            <label htmlFor="calendar-search">Search calendars</label>
+            <input id="calendar-search" type="search" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Title, notes, user" />
+          </div>
+        </div>
+        <div className="calendar-toolbar-actions">
+          <div className="segmented-control" aria-label="Calendar resolution">
+            {(["day", "week", "month", "year"] as CalendarMode[]).map((option) => (
+              <button key={option} className={mode === option ? "active" : ""} type="button" onClick={() => setModeRange(option)}>
+                {option[0].toUpperCase() + option.slice(1)}
+              </button>
+            ))}
+          </div>
+          <button className="secondary-action" type="button" onClick={() => setRefreshKey((current) => current + 1)}>
+            Refresh
+          </button>
+          <button className="page-action-button" type="button" onClick={() => openCreateModal()}>
+            Add Entry
+          </button>
+        </div>
+      </section>
+
+      {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
+
+      <section className="calendar-layout">
+        <section className="detail-panel calendar-board">
+          <div className="detail-header">
+            <div>
+              <span className="eyebrow">{scope === "system" ? "System" : "Users"}</span>
+              <h3>{mode[0].toUpperCase() + mode.slice(1)} Calendar</h3>
+              <p>{entries.length} entr{entries.length === 1 ? "y" : "ies"}</p>
+            </div>
+          </div>
+          {calendarEntries.loading && !calendarEntries.data ? <PanelSkeleton compact /> : null}
+          {calendarEntries.error && !calendarEntries.data ? <ErrorPanel error={calendarEntries.error} compact /> : null}
+          {!calendarEntries.loading && !entries.length ? <EmptyPanel message="No calendar entries in this range." compact /> : null}
+          {mode === "day" ? (
+            <CalendarDaySchedule
+              entries={entries}
+              users={activeUsers}
+              scope={scope}
+              selectedUserId={selectedUserId}
+              date={fromDate}
+              onAddSlot={(start, userId) => openCreateModal(start, userId)}
+              onEditEntry={openEditModal}
+              onMoveEntry={moveCalendarEntry}
+              onOpenSource={onOpenSource}
+            />
+          ) : (
+            groupedEntries.map((group) => (
+              <section className="calendar-period" key={group.key}>
+                <h4>{group.label}</h4>
+                <div className="calendar-entry-list">
+                  {group.entries.map((entry) => (
+                    <CalendarEntryCard
+                      key={entry.id}
+                      entry={entry}
+                      onEditEntry={openEditModal}
+                      onOpenSource={onOpenSource}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))
+          )}
+        </section>
+        <CalendarGantt entries={entries} users={activeUsers} scope={scope} fromDate={fromDate} toDate={toDate} />
+      </section>
+      {calendarModal && (
+        <CalendarEntryModal
+          state={calendarModal}
+          scope={scope}
+          users={activeUsers}
+          entryTypes={activeEntryTypes}
+          selectedOwnerIds={selectedOwnerIds}
+          submitting={submitting}
+          onClose={() => setCalendarModal(null)}
+          onSubmit={submitCalendarEntry}
+          onChange={(draft) => setCalendarModal((current) => current ? { ...current, draft } : current)}
+        />
+      )}
+    </div>
+  );
+}
+
+function CalendarEntryCard({
+  entry,
+  onEditEntry,
+  onOpenSource
+}: {
+  entry: CalendarEntry;
+  onEditEntry: (entry: CalendarEntry) => void;
+  onOpenSource?: (source: CalendarSourceNavigation) => void;
+}) {
+  const source = getCalendarEntryNavigation(entry);
+
+  return (
+    <article className="calendar-entry-card">
+      <button className="calendar-entry-main-button" type="button" onClick={() => onEditEntry(entry)}>
+        <div className="calendar-entry-time">{formatCalendarEntryTime(entry)}</div>
+        <div>
+          <strong>{entry.title}</strong>
+          <div className="muted">{entry.participantNames || entry.ownerName || (entry.scope === "system" ? "System" : "")}</div>
+          {entry.description && <p>{entry.description}</p>}
+        </div>
+        <Badge text={entry.entryTypeName} />
+      </button>
+      {source && onOpenSource ? (
+        <button className="secondary-action calendar-entry-source-link" type="button" onClick={() => onOpenSource(source)}>
+          Open {source.entityType === "customer" ? "Customer" : "Prospect"}
+        </button>
+      ) : null}
+    </article>
+  );
+}
+
+function CalendarGantt({
+  entries,
+  users,
+  scope,
+  fromDate,
+  toDate
+}: {
+  entries: CalendarEntry[];
+  users: User[];
+  scope: "user" | "system";
+  fromDate: string;
+  toDate: string;
+}) {
+  const start = parseDateInput(fromDate);
+  const end = addDays(parseDateInput(toDate || fromDate), 1);
+  const rangeMs = Math.max(1, end.getTime() - start.getTime());
+  const rows = scope === "system"
+    ? [{ id: 0, label: "System", entries }]
+    : users
+        .map((user) => ({
+          id: user.id,
+          label: user.fullName,
+          entries: entries.filter((entry) => entry.participantUserIds.includes(user.id) || entry.ownerUserId === user.id)
+        }))
+        .filter((row) => row.entries.length);
+
+  return (
+    <section className="detail-panel calendar-gantt-panel">
+      <div className="detail-header detail-header-inline">
+        <div>
+          <span className="eyebrow">Timeline</span>
+          <h3>Gantt View</h3>
+        </div>
+      </div>
+      {!rows.length ? <EmptyPanel message="No timeline rows in this range." compact /> : (
+        <div className="calendar-gantt">
+          {rows.map((row) => (
+            <div className="calendar-gantt-row" key={row.id}>
+              <div className="calendar-gantt-label">{row.label}</div>
+              <div className="calendar-gantt-track">
+                {row.entries.map((entry) => {
+                  const entryStart = new Date(entry.startsAt ?? entry.createdAt);
+                  const entryEnd = new Date(entry.endsAt ?? entry.startsAt ?? entry.createdAt);
+                  const left = Math.max(0, Math.min(100, ((entryStart.getTime() - start.getTime()) / rangeMs) * 100));
+                  const width = Math.max(3, Math.min(100 - left, ((Math.max(entryEnd.getTime(), entryStart.getTime() + 60 * 60 * 1000) - entryStart.getTime()) / rangeMs) * 100));
+                  return (
+                    <span className="calendar-gantt-bar" key={`${row.id}-${entry.id}`} style={{ left: `${left}%`, width: `${width}%` }} title={`${entry.title} ${formatCalendarEntryTime(entry)}`}>
+                      {entry.title}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CalendarEntryModal({
+  state,
+  scope,
+  users,
+  entryTypes,
+  selectedOwnerIds,
+  submitting,
+  onClose,
+  onSubmit,
+  onChange
+}: {
+  state: CalendarEntryModalState;
+  scope: "user" | "system";
+  users: User[];
+  entryTypes: CalendarEntryType[];
+  selectedOwnerIds: number[];
+  submitting: boolean;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onChange: (draft: CalendarEntryDraft) => void;
+}) {
+  const draft = state.draft;
+  const canSave = Boolean(draft.title.trim()) && Boolean(draft.startsAt) && entryTypes.length > 0 && (scope === "system" || selectedOwnerIds.length > 0);
+  const updateDraft = (next: Partial<CalendarEntryDraft>) => onChange({ ...draft, ...next });
+  const startParts = splitDateTimeLocal(draft.startsAt);
+  const endParts = splitDateTimeLocal(draft.endsAt || draft.startsAt);
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal-panel calendar-entry-modal" aria-modal="true" aria-labelledby="calendar-entry-modal-title" role="dialog">
+        <div className="modal-header">
+          <div>
+            <span className="eyebrow">Calendar</span>
+            <h3 id="calendar-entry-modal-title">{state.mode === "edit" ? "Edit Entry" : "Add Entry"}</h3>
+          </div>
+          <button className="modal-close" type="button" onClick={onClose}>Close</button>
+        </div>
+        <form className="calendar-quick-form" onSubmit={(event) => void onSubmit(event)}>
+          <div className="calendar-quick-row calendar-quick-title-row">
+            <input
+              aria-label="Title"
+              className="calendar-title-input"
+              autoFocus
+              placeholder="What is happening?"
+              value={draft.title}
+              onChange={(event) => updateDraft({ title: event.target.value })}
+            />
+            <select aria-label="Type" value={draft.calendarEntryTypeId || (entryTypes[0] ? String(entryTypes[0].id) : "")} onChange={(event) => updateDraft({ calendarEntryTypeId: event.target.value })}>
+              {entryTypes.map((type) => <option key={type.id} value={type.id}>{type.label}</option>)}
+            </select>
+          </div>
+          <div className="calendar-quick-row">
+            <label>
+              <span>Date</span>
+              <input
+                type="date"
+                required
+                value={startParts.date}
+                onChange={(event) => {
+                  const nextDate = event.target.value;
+                  updateDraft({
+                    startsAt: combineDateAndTime(nextDate, startParts.time),
+                    endsAt: draft.endsAt ? combineDateAndTime(nextDate, endParts.time) : ""
+                  });
+                }}
+              />
+            </label>
+            <label>
+              <span>Start time</span>
+              <input type="time" step="60" required value={startParts.time} onChange={(event) => updateDraft({ startsAt: combineDateAndTime(startParts.date, event.target.value) })} />
+            </label>
+          </div>
+          <div className="calendar-quick-row calendar-quick-row-compact">
+            <label>
+              <span>End time</span>
+              <input type="time" step="60" value={endParts.time} onChange={(event) => updateDraft({ endsAt: combineDateAndTime(startParts.date, event.target.value) })} />
+            </label>
+          </div>
+          {scope === "user" && (
+            <div className="calendar-user-picker compact">
+              {users.map((user) => (
+                <label key={user.id}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(draft.ownerUserIds[String(user.id)])}
+                    onChange={(event) => updateDraft({ ownerUserIds: { ...draft.ownerUserIds, [user.id]: event.target.checked } })}
+                  />
+                  <span>{user.fullName}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <textarea
+            aria-label="Notes"
+            placeholder="Notes"
+            rows={3}
+            value={draft.description}
+            onChange={(event) => updateDraft({ description: event.target.value })}
+          />
+          <div className="modal-actions">
+            {scope === "user" && selectedOwnerIds.length === 0 && <span className="page-action-note">Select at least one user calendar.</span>}
+            {!entryTypes.length && <span className="page-action-note">Add an active Calendar Entry Type before saving entries.</span>}
+            <button className="secondary-action" type="button" onClick={onClose}>Cancel</button>
+            <button className="page-action-button" type="submit" disabled={submitting || !canSave}>
+              {submitting ? "Saving..." : state.mode === "edit" ? "Save Changes" : "Add Entry"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function CalendarDaySchedule({
+  entries,
+  users,
+  scope,
+  selectedUserId,
+  date,
+  onAddSlot,
+  onEditEntry,
+  onMoveEntry,
+  onOpenSource
+}: {
+  entries: CalendarEntry[];
+  users: User[];
+  scope: "user" | "system";
+  selectedUserId: string;
+  date: string;
+  onAddSlot: (start: Date, userId?: number) => void;
+  onEditEntry: (entry: CalendarEntry) => void;
+  onMoveEntry: (entry: CalendarEntry, startsAt: Date, userId?: number) => void;
+  onOpenSource?: (source: CalendarSourceNavigation) => void;
+}) {
+  const dayStartHour = 7;
+  const dayEndHour = 19;
+  const slotMinutes = 30;
+  const dayStart = parseDateInput(date);
+  dayStart.setHours(dayStartHour, 0, 0, 0);
+  const dayEnd = parseDateInput(date);
+  dayEnd.setHours(dayEndHour, 0, 0, 0);
+  const dayMs = dayEnd.getTime() - dayStart.getTime();
+  const slots = Array.from({ length: ((dayEndHour - dayStartHour) * 60) / slotMinutes }, (_, index) => {
+    const start = new Date(dayStart);
+    start.setMinutes(start.getMinutes() + index * slotMinutes);
+    return start;
+  });
+  const visibleUsers = scope === "system"
+    ? []
+    : selectedUserId && selectedUserId !== "all"
+      ? users.filter((user) => String(user.id) === selectedUserId)
+      : users;
+  const rows = scope === "system"
+    ? [{ id: 0, label: "System", entries, busyEntries: entries }]
+    : visibleUsers.map((user) => {
+        const userEntries = entries.filter((entry) => isEntryForUser(entry, user.id) || entry.scope === "system");
+        const busyEntries = userEntries.filter((entry) => isEntryForUser(entry, user.id));
+        return { id: user.id, label: user.fullName, entries: userEntries, busyEntries };
+      });
+
+  function dropEntry(event: React.DragEvent, start: Date, userId?: number) {
+    event.preventDefault();
+    const rawId = event.dataTransfer.getData("text/plain");
+    const entry = entries.find((row) => String(row.id) === rawId);
+    if (entry) {
+      onMoveEntry(entry, start, userId);
+    }
+  }
+
+  return (
+    <section className="calendar-day-scheduler" style={{ gridTemplateColumns: `72px repeat(${Math.max(1, rows.length)}, minmax(220px, 1fr))` }}>
+      <div className="calendar-day-corner" />
+      {rows.map((row) => {
+        const busyBlocks = buildCalendarDayBusyBlocks(row.busyEntries, dayStart, dayEnd);
+        const freeBlocks = buildCalendarFreeBlocks(busyBlocks, dayStart, dayEnd);
+        return (
+          <div className="calendar-day-column-header" key={`header-${row.id}`}>
+            <strong>{row.label}</strong>
+            <span>{formatFreeSlotSummary(freeBlocks)}</span>
+          </div>
+        );
+      })}
+      {slots.map((slot) => (
+        <div className="calendar-day-time-cell" key={`time-${slot.getTime()}`}>{formatTimeOnly(slot)}</div>
+      ))}
+      {rows.map((row) => (
+        <div className="calendar-day-column" key={row.id}>
+          {slots.map((slot) => (
+            <button
+              className="calendar-day-slot"
+              type="button"
+              key={`${row.id}-${slot.getTime()}`}
+              onClick={() => onAddSlot(slot, row.id || undefined)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => dropEntry(event, slot, row.id || undefined)}
+              title={`Add at ${formatTimeOnly(slot)} for ${row.label}`}
+            >
+              <span className="sr-only">Add at {formatTimeOnly(slot)} for {row.label}</span>
+            </button>
+          ))}
+          {row.entries.map((entry) => {
+            const placement = getCalendarDayVerticalPlacement(entry, dayStart, dayEnd);
+            if (!placement) return null;
+            const isContext = scope === "user" && entry.scope === "system";
+            const source = getCalendarEntryNavigation(entry);
+            const style = isContext
+              ? { top: `${Math.max(0, placement.top)}px`, height: `${Math.min(24, placement.height)}px` }
+              : { top: `${placement.top}px`, height: `${placement.height}px` };
+            return (
+              <button
+                className={isContext ? "calendar-day-entry-block context" : "calendar-day-entry-block"}
+                type="button"
+                draggable={entry.id > 0 && !isContext}
+                key={entry.id}
+                style={style}
+                title={`${entry.title} ${formatCalendarEntryTime(entry)}`}
+                onClick={(event) => {
+                  if (source && onOpenSource && event.altKey) {
+                    onOpenSource(source);
+                    return;
+                  }
+                  onEditEntry(entry);
+                }}
+                onDragStart={(event) => event.dataTransfer.setData("text/plain", String(entry.id))}
+              >
+                <strong>{formatCalendarEntryShortTime(entry)}</strong>
+                <span>{entry.title}</span>
+                {source ? <em>{source.entityType}</em> : null}
+              </button>
+            );
+          })}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function buildCampaignCalendarEntries(campaigns: Campaign[], fromDate: string, toDate: string, searchText: string): CalendarEntry[] {
+  const from = parseDateInput(fromDate);
+  from.setHours(0, 0, 0, 0);
+  const to = parseDateInput(toDate || fromDate);
+  to.setHours(23, 59, 59, 999);
+  const search = searchText.trim().toLowerCase();
+  const entries: CalendarEntry[] = [];
+
+  campaigns.forEach((campaign) => {
+    if (campaign.startDate) {
+      const campaignStart = parseDateInput(campaign.startDate);
+      const campaignEnd = campaign.endDate ? parseDateInput(campaign.endDate) : campaignStart;
+      campaignEnd.setHours(23, 59, 59, 999);
+      const campaignText = [
+        campaign.name,
+        campaign.status,
+        campaign.objective,
+        campaign.productService,
+        campaign.targetAudience
+      ].filter(Boolean).join(" ").toLowerCase();
+
+      if (rangesOverlap(campaignStart, campaignEnd, from, to) && (!search || campaignText.includes(search))) {
+        entries.push({
+          id: -100000 - campaign.id,
+          entryTypeName: "Campaign",
+          entryTypeCode: "campaign",
+          title: campaign.name,
+          description: campaign.objective || campaign.description || campaign.status,
+          scope: "system",
+          status: campaign.status,
+          startsAt: `${campaign.startDate}T00:00:00`,
+          endsAt: `${(campaign.endDate || campaign.startDate)}T23:59:59`,
+          priority: "normal",
+          createdAt: campaign.createdAt,
+          updatedAt: campaign.createdAt,
+          participantUserIds: [],
+          participantNames: "Campaign"
+        });
+      }
+    }
+
+    campaign.waves.forEach((wave) => {
+      if (!wave.scheduledDate) return;
+      const waveDate = parseDateInput(wave.scheduledDate);
+      const waveText = [
+        campaign.name,
+        wave.name,
+        wave.channel,
+        wave.status,
+        wave.assignedTeamOrUser
+      ].filter(Boolean).join(" ").toLowerCase();
+
+      if (dateInRange(waveDate, from, to) && (!search || waveText.includes(search))) {
+        entries.push({
+          id: -200000 - wave.id,
+          entryTypeName: "Wave",
+          entryTypeCode: "campaign_wave",
+          title: `${campaign.name}: ${wave.name}`,
+          description: `${wave.channel} wave ${wave.waveNumber}${wave.assignedTeamOrUser ? ` assigned to ${wave.assignedTeamOrUser}` : ""}`,
+          scope: "system",
+          status: wave.status,
+          startsAt: `${wave.scheduledDate}T09:00:00`,
+          endsAt: `${wave.scheduledDate}T17:00:00`,
+          priority: "normal",
+          createdAt: wave.createdAt,
+          updatedAt: wave.createdAt,
+          participantUserIds: [],
+          participantNames: wave.assignedTeamOrUser || "Campaign wave"
+        });
+      }
+    });
+  });
+
+  return entries;
+}
+
 function CampaignsView({
   state,
   form,
   onFormChange,
+  users,
   leadStatuses,
+  responseStatuses,
   onDataChanged
 }: {
   state: LoadState<Campaign[]>;
   form: CampaignFormState;
   onFormChange: Dispatch<SetStateAction<CampaignFormState>>;
+  users: User[];
   leadStatuses: LeadStatusOption[];
+  responseStatuses: ResponseStatusOption[];
   onDataChanged: () => void;
 }) {
   const [mode, setMode] = useState<"list" | "add">("list");
@@ -11257,8 +15160,14 @@ function CampaignsView({
   const [waveLeadsState, setWaveLeadsState] = useState<LoadState<Lead[]>>({ loading: false });
   const [waveLeadSearchText, setWaveLeadSearchText] = useState("");
   const [waveLeadPriorityFilter, setWaveLeadPriorityFilter] = useState("all");
-  const [waveLeadSortKey, setWaveLeadSortKey] = useState<"id" | "customerName" | "tradingName" | "postcode" | "leadPriority" | "leadStatus">("id");
+  const [waveLeadSortKey, setWaveLeadSortKey] = useState<"id" | "customerName" | "tradingName" | "postcode" | "leadPriority" | "leadStatus" | "responseStatus">("id");
   const [waveLeadSortDirection, setWaveLeadSortDirection] = useState<SortDirection>("asc");
+  const [telesaleSendModal, setTelesaleSendModal] = useState<TelesaleWaveSendModalState | null>(null);
+  const [waveInteractionState, setWaveInteractionState] = useState<LoadState<TelesaleLeadInteractionSummary[]>>({ loading: false });
+  const [telesaleInteractionModal, setTelesaleInteractionModal] = useState<TelesaleLeadInteractionModalState | null>(null);
+  const [waveLeadContactHistoryModal, setWaveLeadContactHistoryModal] = useState<WaveLeadContactHistoryModalState | null>(null);
+  const [waveLeadTelesalesInstructionModal, setWaveLeadTelesalesInstructionModal] = useState<WaveLeadTelesalesInstructionModalState | null>(null);
+  const telesaleUsers = users.filter((user) => user.userType === "Telesale");
 
   function handleWaveLeadSort(nextKey: typeof waveLeadSortKey) {
     if (waveLeadSortKey === nextKey) {
@@ -11377,6 +15286,7 @@ function CampaignsView({
     setWaveLeadPriorityFilter("all");
     setWaveLeadSortKey("id");
     setWaveLeadSortDirection("asc");
+    setWaveInteractionState({ loading: false });
     setSelectedWaveId(waveId);
     await loadWaveLeads(waveId);
   }
@@ -11404,6 +15314,227 @@ function CampaignsView({
     document.body.appendChild(link);
     link.click();
     link.remove();
+  }
+
+  function downloadWaveTelesaleJson(waveId: number) {
+    const link = document.createElement("a");
+    link.href = `${apiBase}/api/campaign-waves/${waveId}/export/telesale`;
+    link.download = `campaign-wave-${waveId}-telesale.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  async function checkWaveTelesalesInteractions(waveId: number) {
+    setWaveInteractionState({ loading: true });
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${waveId}/telesales-interactions`);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: string; error?: string } | null;
+        throw new Error(payload?.error ?? payload?.detail ?? `HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as TelesaleLeadInteractionSummary[];
+      setWaveInteractionState({ data, loading: false });
+      setNotice({
+        kind: "success",
+        message: `${data.length} lead${data.length === 1 ? "" : "s"} in this wave have Telesales interactions.`
+      });
+    } catch (error) {
+      setWaveInteractionState({
+        error: error instanceof Error ? error.message : "Could not check Telesales interactions.",
+        loading: false
+      });
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not check Telesales interactions."
+      });
+    }
+  }
+
+  async function openTelesalesInteractionModal(waveId: number, lead: Lead) {
+    setTelesaleInteractionModal({ waveId, lead, state: { loading: true } });
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${waveId}/leads/${lead.id}/telesales-interactions`);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: string; error?: string } | null;
+        throw new Error(payload?.error ?? payload?.detail ?? `HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as TelesaleLeadInteractionDetail[];
+      setTelesaleInteractionModal({ waveId, lead, state: { data, loading: false } });
+    } catch (error) {
+      setTelesaleInteractionModal({
+        waveId,
+        lead,
+        state: {
+          error: error instanceof Error ? error.message : "Could not load Telesales interactions.",
+          loading: false
+        }
+      });
+    }
+  }
+
+  function openWaveLeadContactHistoryModal(waveId: number, lead: Lead) {
+    setWaveLeadContactHistoryModal({
+      waveId,
+      lead,
+      form: {
+        channel: "phone_call",
+        contactedAt: "",
+        reason: "",
+        whoBy: "",
+        responseStatus: "",
+        notes: ""
+      },
+      saving: false
+    });
+  }
+
+  async function saveWaveLeadContactHistory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!waveLeadContactHistoryModal) return;
+
+    const { waveId, lead, form } = waveLeadContactHistoryModal;
+    setWaveLeadContactHistoryModal((current) => current ? { ...current, saving: true } : current);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/leads/${lead.id}/contact-history`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: form.channel,
+          contactedAt: form.contactedAt || null,
+          reason: form.reason || null,
+          whoBy: form.whoBy || null,
+          responseStatus: form.responseStatus || null,
+          notes: form.notes || null
+        })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setWaveLeadContactHistoryModal(null);
+      await loadWaveLeads(waveId);
+      onDataChanged();
+      setNotice({ kind: "success", message: `Contact history added to Lead #${lead.id}.` });
+    } catch (error) {
+      setWaveLeadContactHistoryModal((current) => current ? { ...current, saving: false } : current);
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not add contact history."
+      });
+    }
+  }
+
+  function openWaveLeadTelesalesInstructionModal(waveId: number, lead: Lead) {
+    setWaveLeadTelesalesInstructionModal({
+      waveId,
+      lead,
+      form: {
+        instructionText: "",
+        priority: "medium"
+      },
+      saving: false
+    });
+  }
+
+  async function saveWaveLeadTelesalesInstruction(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!waveLeadTelesalesInstructionModal) return;
+
+    const { waveId, lead, form } = waveLeadTelesalesInstructionModal;
+    if (!form.instructionText.trim()) {
+      setNotice({ kind: "error", message: "Enter an instruction for Telesales." });
+      return;
+    }
+
+    setWaveLeadTelesalesInstructionModal((current) => current ? { ...current, saving: true } : current);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${waveId}/leads/${lead.id}/telesales-instructions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instructionText: form.instructionText,
+          priority: form.priority
+        })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setWaveLeadTelesalesInstructionModal(null);
+      setNotice({ kind: "success", message: `Telesales instruction added to Lead #${lead.id}.` });
+    } catch (error) {
+      setWaveLeadTelesalesInstructionModal((current) => current ? { ...current, saving: false } : current);
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not add Telesales instruction."
+      });
+    }
+  }
+
+  function openTelesaleSendModal(campaign: Campaign, wave: CampaignWave) {
+    setNotice(null);
+    setTelesaleSendModal({
+      campaign,
+      wave,
+      selectedUserIds: {},
+      saving: false
+    });
+  }
+
+  async function sendWaveToTelesales() {
+    if (!telesaleSendModal) return;
+
+    const selectedUserIds = Object.entries(telesaleSendModal.selectedUserIds)
+      .filter(([, selected]) => selected)
+      .map(([userId]) => Number(userId));
+
+    if (selectedUserIds.length === 0) {
+      setNotice({ kind: "error", message: "Select at least one Telesale user." });
+      return;
+    }
+
+    setTelesaleSendModal((current) => current ? { ...current, saving: true } : current);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${telesaleSendModal.wave.id}/send-to-telesales`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userIds: selectedUserIds })
+      });
+      const payload = await response.json().catch(() => null) as { error?: string; exportId?: number; leadCount?: number; userCount?: number } | null;
+      if (!response.ok) {
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setTelesaleSendModal(null);
+      setNotice({
+        kind: "success",
+        message: `Wave sent to ${payload?.userCount ?? selectedUserIds.length} Telesale user${(payload?.userCount ?? selectedUserIds.length) === 1 ? "" : "s"} with ${payload?.leadCount ?? 0} lead${(payload?.leadCount ?? 0) === 1 ? "" : "s"}.`
+      });
+      onDataChanged();
+      if (selectedWaveId === telesaleSendModal.wave.id) {
+        await loadWaveLeads(telesaleSendModal.wave.id);
+      }
+    } catch (error) {
+      setTelesaleSendModal((current) => current ? { ...current, saving: false } : current);
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not send wave to Telesales."
+      });
+    }
   }
 
   async function updateWaveLeadStatus(waveId: number, leadId: number, leadStatus: string) {
@@ -11448,6 +15579,28 @@ function CampaignsView({
       setNotice({
         kind: "error",
         message: error instanceof Error ? error.message : "Could not update lead priority."
+      });
+    }
+  }
+
+  async function updateWaveLeadResponseStatus(waveId: number, leadId: number, responseStatus: string) {
+    setNotice(null);
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${waveId}/leads/${leadId}/response-status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ responseStatus: responseStatus || null })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      await loadWaveLeads(waveId);
+      setNotice({ kind: "success", message: "Response status updated." });
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not update response status."
       });
     }
   }
@@ -11503,6 +15656,7 @@ function CampaignsView({
         waveLeadSortDirection
       )
     );
+  const waveInteractionByLeadId = new Map((waveInteractionState.data ?? []).map((item) => [item.leadId, item]));
 
   return (
     <div className="test-page">
@@ -11610,6 +15764,7 @@ function CampaignsView({
                         <th>Scheduled</th>
                         <th>Status</th>
                         <th>Assigned</th>
+                        <th>Telesales</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -11626,10 +15781,23 @@ function CampaignsView({
                           <td>{formatDate(wave.scheduledDate)}</td>
                           <td>{wave.status}</td>
                           <td>{wave.assignedTeamOrUser ?? ""}</td>
+                          <td>
+                            {wave.telesaleSendCount > 0 ? (
+                              <span className="stacked">
+                                <strong>{wave.telesaleUsers ?? "Sent"}</strong>
+                                <span className="muted">
+                                  {formatDateTime(wave.lastTelesaleSentAt)}
+                                  {wave.telesaleSendCount > 1 ? ` (${wave.telesaleSendCount} sends)` : ""}
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="muted">Not sent</span>
+                            )}
+                          </td>
                           </tr>
                           {selectedWaveId === wave.id && (
                             <tr className="detail-table-row">
-                              <td className="detail-table-cell" colSpan={6}>
+                              <td className="detail-table-cell" colSpan={7}>
                                 {waveLeadsState.loading && <PanelSkeleton compact />}
                                 {waveLeadsState.error && <ErrorPanel error={waveLeadsState.error} />}
                                 {waveLeadsState.data && (
@@ -11643,7 +15811,22 @@ function CampaignsView({
                                         <button className="secondary-action" type="button" onClick={() => downloadWaveCsv(wave.id)}>
                                           Export CSV
                                         </button>
+                                        <button className="secondary-action" type="button" onClick={() => downloadWaveTelesaleJson(wave.id)}>
+                                          Export as Telesale
+                                        </button>
+                                        <button className="page-action-button" type="button" onClick={() => openTelesaleSendModal(campaign, wave)}>
+                                          Send to Telesales
+                                        </button>
+                                        <button
+                                          className="secondary-action"
+                                          type="button"
+                                          disabled={waveInteractionState.loading}
+                                          onClick={() => void checkWaveTelesalesInteractions(wave.id)}
+                                        >
+                                          {waveInteractionState.loading ? "Checking..." : "Check Telesales"}
+                                        </button>
                                       </div>
+                                      {waveInteractionState.error && <StatusBanner kind="error" message={waveInteractionState.error} />}
                                       <section className="table-controls">
                                         <div className="table-search">
                                           <label htmlFor={`wave-leads-search-${wave.id}`}>Search leads</label>
@@ -11675,6 +15858,7 @@ function CampaignsView({
                                       <table>
                                         <thead>
                                           <tr>
+                                            <th></th>
                                             <th>{renderSortHeader("Lead", waveLeadSortKey === "id", waveLeadSortDirection, () => handleWaveLeadSort("id"))}</th>
                                             <th>{renderSortHeader("Customer", waveLeadSortKey === "customerName", waveLeadSortDirection, () => handleWaveLeadSort("customerName"))}</th>
                                             <th>{renderSortHeader("Trading name", waveLeadSortKey === "tradingName", waveLeadSortDirection, () => handleWaveLeadSort("tradingName"))}</th>
@@ -11683,12 +15867,55 @@ function CampaignsView({
                                             <th>{renderSortHeader("Postcode", waveLeadSortKey === "postcode", waveLeadSortDirection, () => handleWaveLeadSort("postcode"))}</th>
                                             <th>{renderSortHeader("Priority", waveLeadSortKey === "leadPriority", waveLeadSortDirection, () => handleWaveLeadSort("leadPriority"))}</th>
                                             <th>{renderSortHeader("Status", waveLeadSortKey === "leadStatus", waveLeadSortDirection, () => handleWaveLeadSort("leadStatus"))}</th>
+                                            <th>{renderSortHeader("Response", waveLeadSortKey === "responseStatus", waveLeadSortDirection, () => handleWaveLeadSort("responseStatus"))}</th>
                                             <th>Action</th>
                                           </tr>
                                         </thead>
                                         <tbody>
                                           {filteredWaveLeads?.map((lead) => (
                                             <tr key={lead.id}>
+                                              <td className="interaction-icon-cell">
+                                                <div className="wave-lead-row-actions">
+                                                  <button
+                                                    className="icon-button"
+                                                    type="button"
+                                                    onClick={() => openWaveLeadContactHistoryModal(wave.id, lead)}
+                                                    title="Add contact history"
+                                                  >
+                                                    <MessageSquare size={15} aria-hidden="true" />
+                                                    <span className="sr-only">Add contact history</span>
+                                                  </button>
+                                                  <button
+                                                    className="icon-button"
+                                                    type="button"
+                                                    onClick={() => openWaveLeadTelesalesInstructionModal(wave.id, lead)}
+                                                    title="Add Telesales instruction"
+                                                  >
+                                                    <Megaphone size={15} aria-hidden="true" />
+                                                    <span className="sr-only">Add Telesales instruction</span>
+                                                  </button>
+                                                  {lead.contactHistoryCount > 0 ? (
+                                                    <span
+                                                      className="contact-history-row-icon"
+                                                      title={`${lead.contactHistoryCount} contact histor${lead.contactHistoryCount === 1 ? "y entry" : "y entries"}`}
+                                                    >
+                                                      <FileText size={14} aria-hidden="true" />
+                                                      <span className="sr-only">Contact history exists</span>
+                                                    </span>
+                                                  ) : null}
+                                                {waveInteractionByLeadId.has(lead.id) ? (
+                                                  <button
+                                                    type="button"
+                                                    className="interaction-icon"
+                                                    onClick={() => void openTelesalesInteractionModal(wave.id, lead)}
+                                                    title={`Telesales update recorded${waveInteractionByLeadId.get(lead.id)?.telesaleUsers ? ` by ${waveInteractionByLeadId.get(lead.id)?.telesaleUsers}` : ""}`}
+                                                  >
+                                                    <Info size={13} aria-hidden="true" />
+                                                    <span className="sr-only">View Telesales interactions</span>
+                                                  </button>
+                                                ) : null}
+                                                </div>
+                                              </td>
                                               <td>
                                                 <span className="mono">Lead #{lead.id}</span>
                                               </td>
@@ -11712,6 +15939,20 @@ function CampaignsView({
                                                   onChange={(event) => void updateWaveLeadStatus(wave.id, lead.id, event.target.value)}
                                                 >
                                                   {leadStatuses.map((status) => (
+                                                    <option key={status.id} value={status.name}>
+                                                      {status.name}
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                              </td>
+                                              <td>
+                                                <select
+                                                  className="header-select"
+                                                  value={lead.responseStatus ?? ""}
+                                                  onChange={(event) => void updateWaveLeadResponseStatus(wave.id, lead.id, event.target.value)}
+                                                >
+                                                  <option value="">None</option>
+                                                  {responseStatuses.map((status) => (
                                                     <option key={status.id} value={status.name}>
                                                       {status.name}
                                                     </option>
@@ -11826,6 +16067,880 @@ function CampaignsView({
           </section>
         );
       })}
+      {telesaleInteractionModal && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel modal-panel-wide" aria-modal="true" aria-labelledby="telesales-interactions-title" role="dialog">
+            <div className="modal-header">
+              <div>
+                <span className="eyebrow">Telesales</span>
+                <h3 id="telesales-interactions-title">Lead #{telesaleInteractionModal.lead.id} Interactions</h3>
+                <p>{telesaleInteractionModal.lead.customerName}</p>
+              </div>
+              <button className="modal-close" type="button" onClick={() => setTelesaleInteractionModal(null)}>
+                Close
+              </button>
+            </div>
+            <div className="modal-body modal-scroll">
+              {telesaleInteractionModal.state.loading && <PanelSkeleton compact />}
+              {telesaleInteractionModal.state.error && <ErrorPanel error={telesaleInteractionModal.state.error} />}
+              {telesaleInteractionModal.state.data && !telesaleInteractionModal.state.data.length && (
+                <EmptyPanel message="No Telesales interactions found for this lead." />
+              )}
+              {Boolean(telesaleInteractionModal.state.data?.length) && (
+                <ol className="interaction-timeline">
+                  {telesaleInteractionModal.state.data!.map((interaction, index) => (
+                    <li className="interaction-timeline-item" key={`${interaction.occurredAt}-${interaction.activityType}-${index}`}>
+                      <div className="interaction-timeline-marker" aria-hidden="true" />
+                      <div className="interaction-timeline-content">
+                        <div className="interaction-timeline-header">
+                          <strong>{interaction.title}</strong>
+                          <span>{formatDateTime(interaction.occurredAt)}</span>
+                        </div>
+                        <div className="interaction-timeline-meta">
+                          <span>{interaction.activityType}</span>
+                          {interaction.telesaleUser && <span>{interaction.telesaleUser}</span>}
+                        </div>
+                        {interaction.details && <p>{interaction.details}</p>}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+      {waveLeadContactHistoryModal && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel wave-contact-history-modal" aria-modal="true" aria-labelledby="wave-lead-contact-history-title" role="dialog">
+            <div className="modal-header">
+              <div>
+                <span className="eyebrow">Lead</span>
+                <h3 id="wave-lead-contact-history-title">Add Contact History</h3>
+                <p>Lead #{waveLeadContactHistoryModal.lead.id} - {waveLeadContactHistoryModal.lead.customerName}</p>
+              </div>
+              <button className="modal-close" type="button" onClick={() => setWaveLeadContactHistoryModal(null)}>
+                Close
+              </button>
+            </div>
+            <form className="modal-body wave-contact-history-form" onSubmit={(event) => void saveWaveLeadContactHistory(event)}>
+              <div className="table-search-group">
+                <div className="table-search">
+                  <label htmlFor="wave-lead-history-channel">Channel</label>
+                  <select
+                    id="wave-lead-history-channel"
+                    className="header-select"
+                    value={waveLeadContactHistoryModal.form.channel}
+                    onChange={(event) => setWaveLeadContactHistoryModal((current) => current ? { ...current, form: { ...current.form, channel: event.target.value } } : current)}
+                  >
+                    <option value="email">Email</option>
+                    <option value="mail">Mail</option>
+                    <option value="phone_call">Phone call</option>
+                    <option value="sms">SMS</option>
+                    <option value="in_person">In person</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div className="table-search">
+                  <label htmlFor="wave-lead-history-contacted-at">Date/time</label>
+                  <input
+                    id="wave-lead-history-contacted-at"
+                    type="datetime-local"
+                    value={waveLeadContactHistoryModal.form.contactedAt}
+                    onChange={(event) => setWaveLeadContactHistoryModal((current) => current ? { ...current, form: { ...current.form, contactedAt: event.target.value } } : current)}
+                  />
+                </div>
+              </div>
+              <div className="table-search">
+                <label htmlFor="wave-lead-history-response-status">Response status</label>
+                <select
+                  id="wave-lead-history-response-status"
+                  className="header-select"
+                  value={waveLeadContactHistoryModal.form.responseStatus}
+                  onChange={(event) => setWaveLeadContactHistoryModal((current) => current ? { ...current, form: { ...current.form, responseStatus: event.target.value } } : current)}
+                >
+                  <option value="">None</option>
+                  {responseStatuses.map((status) => (
+                    <option key={status.id} value={status.name}>
+                      {status.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="table-search-group">
+                <div className="table-search">
+                  <label htmlFor="wave-lead-history-reason">Reason</label>
+                  <input
+                    id="wave-lead-history-reason"
+                    type="text"
+                    value={waveLeadContactHistoryModal.form.reason}
+                    onChange={(event) => setWaveLeadContactHistoryModal((current) => current ? { ...current, form: { ...current.form, reason: event.target.value } } : current)}
+                  />
+                </div>
+                <div className="table-search">
+                  <label htmlFor="wave-lead-history-who-by">Who by</label>
+                  <input
+                    id="wave-lead-history-who-by"
+                    type="text"
+                    value={waveLeadContactHistoryModal.form.whoBy}
+                    onChange={(event) => setWaveLeadContactHistoryModal((current) => current ? { ...current, form: { ...current.form, whoBy: event.target.value } } : current)}
+                  />
+                </div>
+              </div>
+              <div className="table-search">
+                <label htmlFor="wave-lead-history-notes">Notes</label>
+                <textarea
+                  id="wave-lead-history-notes"
+                  rows={4}
+                  value={waveLeadContactHistoryModal.form.notes}
+                  onChange={(event) => setWaveLeadContactHistoryModal((current) => current ? { ...current, form: { ...current.form, notes: event.target.value } } : current)}
+                />
+              </div>
+              <div className="modal-actions">
+                <button className="secondary-action" type="button" onClick={() => setWaveLeadContactHistoryModal(null)}>
+                  Cancel
+                </button>
+                <button className="page-action-button" type="submit" disabled={waveLeadContactHistoryModal.saving}>
+                  {waveLeadContactHistoryModal.saving ? "Saving..." : "Add Contact Entry"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+      {waveLeadTelesalesInstructionModal && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel wave-contact-history-modal" aria-modal="true" aria-labelledby="wave-lead-telesales-instruction-title" role="dialog">
+            <div className="modal-header">
+              <div>
+                <span className="eyebrow">Telesales</span>
+                <h3 id="wave-lead-telesales-instruction-title">Add Instruction</h3>
+                <p>Lead #{waveLeadTelesalesInstructionModal.lead.id} - {waveLeadTelesalesInstructionModal.lead.customerName}</p>
+              </div>
+              <button className="modal-close" type="button" onClick={() => setWaveLeadTelesalesInstructionModal(null)}>
+                Close
+              </button>
+            </div>
+            <form className="modal-body wave-contact-history-form" onSubmit={(event) => void saveWaveLeadTelesalesInstruction(event)}>
+              <div className="table-search">
+                <label htmlFor="wave-lead-telesales-instruction-priority">Priority</label>
+                <select
+                  id="wave-lead-telesales-instruction-priority"
+                  className="header-select"
+                  value={waveLeadTelesalesInstructionModal.form.priority}
+                  onChange={(event) => setWaveLeadTelesalesInstructionModal((current) => current ? { ...current, form: { ...current.form, priority: event.target.value as LeadPriority } } : current)}
+                >
+                  {leadPriorityOrder.map((priority) => (
+                    <option key={priority} value={priority}>
+                      {getLeadPriorityLabel(priority)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="table-search">
+                <label htmlFor="wave-lead-telesales-instruction-text">Instruction</label>
+                <textarea
+                  id="wave-lead-telesales-instruction-text"
+                  rows={5}
+                  value={waveLeadTelesalesInstructionModal.form.instructionText}
+                  onChange={(event) => setWaveLeadTelesalesInstructionModal((current) => current ? { ...current, form: { ...current.form, instructionText: event.target.value } } : current)}
+                  placeholder="Example: Prioritise this lead today, ask for Sarah, do not call before 2pm."
+                  required
+                />
+              </div>
+              <div className="modal-actions">
+                <button className="secondary-action" type="button" onClick={() => setWaveLeadTelesalesInstructionModal(null)}>
+                  Cancel
+                </button>
+                <button className="page-action-button" type="submit" disabled={waveLeadTelesalesInstructionModal.saving}>
+                  {waveLeadTelesalesInstructionModal.saving ? "Saving..." : "Add Instruction"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+      {telesaleSendModal && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel" aria-modal="true" aria-labelledby="send-telesales-title" role="dialog">
+            <div className="modal-header">
+              <div>
+                <span className="eyebrow">Telesales</span>
+                <h3 id="send-telesales-title">Send Wave</h3>
+              </div>
+              <button className="modal-close" type="button" onClick={() => setTelesaleSendModal(null)}>
+                Close
+              </button>
+            </div>
+            <div className="modal-body">
+              <dl className="detail-list">
+                <div><dt>Campaign</dt><dd>{telesaleSendModal.campaign.name}</dd></div>
+                <div><dt>Wave</dt><dd>{telesaleSendModal.wave.name}</dd></div>
+              </dl>
+              {telesaleUsers.length ? (
+                <div className="selection-option-list">
+                  {telesaleUsers.map((user) => (
+                    <label className="selection-option-row" key={user.id}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(telesaleSendModal.selectedUserIds[user.id])}
+                        onChange={(event) => {
+                          const checked = event.target.checked;
+                          setTelesaleSendModal((current) => current ? {
+                            ...current,
+                            selectedUserIds: {
+                              ...current.selectedUserIds,
+                              [user.id]: checked
+                            }
+                          } : current);
+                        }}
+                      />
+                      <span>
+                        <strong>{user.fullName}</strong>
+                        {user.email ? <span className="muted"> {user.email}</span> : null}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <EmptyPanel message="No users are marked as Telesale yet." />
+              )}
+            </div>
+            <div className="modal-actions">
+              <button className="secondary-action" type="button" onClick={() => setTelesaleSendModal(null)}>
+                Cancel
+              </button>
+              <button
+                className="page-action-button"
+                type="button"
+                disabled={telesaleSendModal.saving || telesaleUsers.length === 0 || !Object.values(telesaleSendModal.selectedUserIds).some(Boolean)}
+                onClick={() => void sendWaveToTelesales()}
+              >
+                {telesaleSendModal.saving ? "Sending..." : "Send to Telesales"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuotesView({
+  state,
+  onDataChanged,
+  onOpenJobs
+}: {
+  state: LoadState<SalesQuote[]>;
+  onDataChanged: () => void;
+  onOpenJobs: () => void;
+}) {
+  const [notice, setNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [detailState, setDetailState] = useState<LoadState<SalesQuoteDetail>>({ loading: false });
+  const [searchText, setSearchText] = useState("");
+  const [sortKey, setSortKey] = useState<"quoteId" | "businessName" | "primaryContactName" | "status" | "postcode" | "commissionBase" | "commission" | "quoteCreatedAt" | "lastStatusChangeAt">("lastStatusChangeAt");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [contextMenuState, setContextMenuState] = useState<QuoteRowContextMenuState | null>(null);
+  const [bookmarkOverrides, setBookmarkOverrides] = useState<Record<string, boolean>>({});
+  const [createdLeadOverrides, setCreatedLeadOverrides] = useState<Record<string, number>>({});
+  const [archiveOverrides, setArchiveOverrides] = useState<Record<string, { isArchived: boolean; archivedAt?: string }>>({});
+  const [showArchivedQuotes, setShowArchivedQuotes] = useState(false);
+  const [archiveModalState, setArchiveModalState] = useState<QuoteArchiveModalState | null>(null);
+  const [activeRefreshJob, setActiveRefreshJob] = useState<QueuedJob | null>(null);
+  const [reloadAvailable, setReloadAvailable] = useState(false);
+
+  useEffect(() => {
+    if (!activeRefreshJob || ["completed", "failed", "cancelled"].includes(activeRefreshJob.status)) return;
+
+    const timer = window.setInterval(() => {
+      void (async () => {
+        try {
+          const response = await fetchWithActor(`${apiBase}/api/jobs/${activeRefreshJob.id}`);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const job = await response.json() as QueuedJob;
+          setActiveRefreshJob(job);
+          if (job.status === "completed") {
+            const changedQuoteCount = typeof job.result?.changedQuoteCount === "number" ? job.result.changedQuoteCount : 0;
+            setReloadAvailable(true);
+            setNotice({
+              kind: "success",
+              message: `Quote refresh job #${job.id} has finished. ${changedQuoteCount} quote${changedQuoteCount === 1 ? "" : "s"} changed.`
+            });
+          } else if (job.status === "failed" || job.status === "cancelled") {
+            setNotice({
+              kind: "error",
+              message: job.errorText ?? `Quote refresh job #${job.id} ${job.status}.`
+            });
+          }
+        } catch (error) {
+          setNotice({ kind: "error", message: error instanceof Error ? error.message : "Could not check quote refresh job." });
+        }
+      })();
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [activeRefreshJob]);
+
+  async function refreshQuotes() {
+    setRefreshing(true);
+    setNotice(null);
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/jobs/paymentsense-quotes-refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ includeProspectDetails: true })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const job = (await response.json()) as QueuedJob;
+      setActiveRefreshJob(job);
+      setReloadAvailable(false);
+      setNotice({ kind: "success", message: `${job.displayName} queued as job #${job.id}.` });
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Could not queue quote refresh." });
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function openQuoteDetail(quoteId: string) {
+    setDetailState({ loading: true });
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/paymentsense-quotes/${encodeURIComponent(quoteId)}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = (await response.json()) as SalesQuoteDetail;
+      setDetailState({ data, loading: false });
+    } catch (error) {
+      setDetailState({
+        error: error instanceof Error ? error.message : "Could not load quote detail.",
+        loading: false
+      });
+    }
+  }
+
+  async function copyQuoteValue(value: string | null | undefined, label: string) {
+    try {
+      const copied = await copyTextToClipboard(value);
+      if (!copied) throw new Error(`No ${label.toLowerCase()} available.`);
+      setNotice({ kind: "success", message: `${label} copied.` });
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : `Could not copy ${label.toLowerCase()}.` });
+    }
+  }
+
+  async function toggleQuoteBookmark(quote: SalesQuote) {
+    const isBookmarked = bookmarkOverrides[quote.quoteId] ?? quote.isBookmarked;
+    setNotice(null);
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/paymentsense-quotes/${encodeURIComponent(quote.quoteId)}/bookmark`, {
+        method: isBookmarked ? "DELETE" : "POST"
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setBookmarkOverrides((current) => ({ ...current, [quote.quoteId]: !isBookmarked }));
+      setNotice({ kind: "success", message: isBookmarked ? "Quote bookmark removed." : "Quote bookmarked." });
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Could not update quote bookmark." });
+    }
+  }
+
+  async function createLeadFromQuote(quote: SalesQuote) {
+    setNotice(null);
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/paymentsense-quotes/${encodeURIComponent(quote.quoteId)}/lead`, { method: "POST" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      const lead = await response.json() as { id: number };
+      setCreatedLeadOverrides((current) => ({ ...current, [quote.quoteId]: lead.id }));
+      setNotice({ kind: "success", message: `Lead #${lead.id} created from quote.` });
+      onDataChanged();
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Could not create lead from quote." });
+    }
+  }
+
+  async function archiveQuote(quote: SalesQuote) {
+    setArchiveModalState((current) => current ? { ...current, saving: true } : current);
+    setNotice(null);
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/paymentsense-quotes/${encodeURIComponent(quote.quoteId)}/archive`, { method: "POST" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json() as { isArchived: boolean; archivedAt?: string };
+      setArchiveOverrides((current) => ({ ...current, [quote.quoteId]: { isArchived: result.isArchived, archivedAt: result.archivedAt } }));
+      setNotice({ kind: "success", message: "Quote archived and any linked lead was closed." });
+      setArchiveModalState(null);
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Could not archive quote." });
+      setArchiveModalState((current) => current ? { ...current, saving: false } : current);
+    }
+  }
+
+  async function unarchiveQuote(quote: SalesQuote) {
+    setNotice(null);
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/paymentsense-quotes/${encodeURIComponent(quote.quoteId)}/archive`, { method: "DELETE" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setArchiveOverrides((current) => ({ ...current, [quote.quoteId]: { isArchived: false, archivedAt: undefined } }));
+      setNotice({ kind: "success", message: "Quote unarchived." });
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "Could not unarchive quote." });
+    }
+  }
+
+  function handleSort(nextKey: typeof sortKey) {
+    if (sortKey === nextKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+
+    setSortKey(nextKey);
+    setSortDirection(nextKey === "quoteCreatedAt" || nextKey === "lastStatusChangeAt" ? "desc" : "asc");
+  }
+
+  const quoteRows = (state.data ?? []).map((quote) => ({
+    ...quote,
+    isBookmarked: bookmarkOverrides[quote.quoteId] ?? quote.isBookmarked,
+    createdLeadId: createdLeadOverrides[quote.quoteId] ?? quote.createdLeadId,
+    isArchived: archiveOverrides[quote.quoteId]?.isArchived ?? quote.isArchived,
+    archivedAt: archiveOverrides[quote.quoteId]?.archivedAt ?? quote.archivedAt
+  }));
+  const filteredQuotes = quoteRows
+    .filter((quote) => showArchivedQuotes ? quote.isArchived : !quote.isArchived)
+    .filter((quote) => {
+      const query = searchText.trim().toLowerCase();
+      if (!query) return true;
+      return [
+        quote.quoteId,
+        quote.prospectId,
+        quote.businessName,
+        quote.primaryContactName,
+        quote.status,
+        quote.postcode,
+        quote.createdLeadId ? `Lead ${quote.createdLeadId}` : ""
+      ].filter(Boolean).some((value) => value!.toLowerCase().includes(query));
+    })
+    .sort((left, right) => compareValues(getQuoteSortValue(left, sortKey), getQuoteSortValue(right, sortKey), sortDirection));
+
+  const quoteCount = quoteRows.length;
+  const archivedQuoteCount = quoteRows.filter((quote) => quote.isArchived).length;
+  const newQuoteCount = quoteRows.filter((quote) => quote.importState === "new").length;
+  const modifiedQuoteCount = quoteRows.filter((quote) => quote.importState === "modified").length;
+  const removedQuoteCount = quoteRows.filter((quote) => quote.importState === "removed").length;
+  const visibleQuoteCount = filteredQuotes.length;
+  const runningRefresh = activeRefreshJob && !["completed", "failed", "cancelled"].includes(activeRefreshJob.status);
+
+  function reloadQuotes() {
+    setReloadAvailable(false);
+    onDataChanged();
+  }
+
+  return (
+    <section className="test-page">
+      <article className="panel">
+        <div className="detail-header">
+          <div>
+            <p className="eyebrow">Leads</p>
+            <h3>Quotes</h3>
+          </div>
+          <div className="detail-header-actions">
+            <button className="secondary-action" type="button" onClick={onOpenJobs}>
+              Jobs
+            </button>
+            <button className="page-action-button" type="button" onClick={() => void refreshQuotes()} disabled={refreshing}>
+              {refreshing ? "Queueing..." : "Refresh Quotes"}
+            </button>
+          </div>
+        </div>
+        {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
+        {runningRefresh ? <StatusBanner kind="success" message={`Quote refresh job #${activeRefreshJob.id} is ${formatJobStatusLabel(activeRefreshJob.status)}${activeRefreshJob.currentStep ? `: ${activeRefreshJob.currentStep}` : "."}`} /> : null}
+        <div className="table-caption">
+          <div>
+            <strong>{visibleQuoteCount}</strong>
+            <span> {showArchivedQuotes ? "archived " : ""}quote{visibleQuoteCount === 1 ? "" : "s"} shown</span>
+            {!showArchivedQuotes ? <span className="muted"> from {quoteCount} total</span> : null}
+            {!showArchivedQuotes ? (
+              <span className="muted"> / {newQuoteCount} new / {modifiedQuoteCount} modified / {removedQuoteCount} removed</span>
+            ) : null}
+          </div>
+          {reloadAvailable ? (
+            <button className="secondary-action" type="button" onClick={reloadQuotes}>
+              Reload Quotes
+            </button>
+          ) : null}
+        </div>
+        <section className="table-controls">
+          <button
+            className={showArchivedQuotes ? "page-action-button" : "secondary-action"}
+            type="button"
+            onClick={() => setShowArchivedQuotes((current) => !current)}
+          >
+            {showArchivedQuotes ? "Show Active Quotes" : `Show Archived Quotes (${archivedQuoteCount})`}
+          </button>
+          <div className="table-search">
+            <label htmlFor="quote-page-search">Search quotes</label>
+            <input
+              id="quote-page-search"
+              type="search"
+              value={searchText}
+              onChange={(event) => setSearchText(event.target.value)}
+              placeholder="Business, contact, quote, prospect, postcode, status"
+            />
+          </div>
+        </section>
+        <DataTable
+          state={state.data ? { ...state, data: filteredQuotes } : state}
+          emptyMessage="No Paymentsense quotes have been imported yet."
+          columns={[
+            renderSortHeader("Quote", sortKey === "quoteId", sortDirection, () => handleSort("quoteId")),
+            renderSortHeader("Business", sortKey === "businessName", sortDirection, () => handleSort("businessName")),
+            renderSortHeader("Primary contact", sortKey === "primaryContactName", sortDirection, () => handleSort("primaryContactName")),
+            renderSortHeader("Status", sortKey === "status", sortDirection, () => handleSort("status")),
+            renderSortHeader("Postcode", sortKey === "postcode", sortDirection, () => handleSort("postcode")),
+            renderSortHeader("Commission base", sortKey === "commissionBase", sortDirection, () => handleSort("commissionBase")),
+            renderSortHeader("Commission", sortKey === "commission", sortDirection, () => handleSort("commission")),
+            renderSortHeader("Created", sortKey === "quoteCreatedAt", sortDirection, () => handleSort("quoteCreatedAt")),
+            renderSortHeader("Last change", sortKey === "lastStatusChangeAt", sortDirection, () => handleSort("lastStatusChangeAt")),
+            "Lead",
+            "Detail"
+          ]}
+          renderRow={(quote) => (
+            <tr
+              key={quote.quoteId}
+              className={quote.isArchived ? "quote-archived-row" : quote.importState === "removed" ? "quote-archived-row" : quote.importState === "modified" ? "quote-changed-row" : quote.createdLeadId ? "lead-linked-row" : undefined}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setContextMenuState({
+                  quote,
+                  x: Math.min(event.clientX, window.innerWidth - 260),
+                  y: Math.min(event.clientY, window.innerHeight - 72)
+                });
+              }}
+            >
+              <td>
+                <span className="mono">{quote.quoteId}</span>
+                <span className="stacked muted mono">{quote.prospectId}</span>
+                {quote.isBookmarked ? <span className="bookmark-dot quote-bookmark-dot" aria-hidden /> : null}
+                {quote.importState === "new" ? <span className="match-chip quote-new-chip">New</span> : null}
+                {quote.importState === "modified" ? <span className="match-chip quote-change-chip">Modified</span> : null}
+                {quote.importState === "removed" ? <span className="match-chip quote-archive-chip">Removed</span> : null}
+                {quote.isArchived ? <span className="match-chip quote-archive-chip">Archived</span> : null}
+              </td>
+              <td>{quote.businessName ?? ""}</td>
+              <td>{quote.primaryContactName ?? ""}</td>
+              <td><Badge text={quote.status} /></td>
+              <td className="mono">{quote.postcode ?? ""}</td>
+              <td>{formatCurrency(quote.commissionBase)}</td>
+              <td>{formatCurrency(quote.commission)}</td>
+              <td>{formatDate(quote.quoteCreatedAt)}</td>
+              <td>{formatDateTime(quote.lastStatusChangeAt)}</td>
+              <td>{quote.createdLeadId ? <span className="mono">Lead #{quote.createdLeadId}</span> : ""}</td>
+              <td>
+                <button className="details-button" type="button" onClick={() => void openQuoteDetail(quote.quoteId)}>
+                  View
+                </button>
+              </td>
+            </tr>
+          )}
+        />
+      </article>
+      <SalesQuoteDetailModal state={detailState} onClose={() => setDetailState({ loading: false })} />
+      <QuoteRowContextMenu
+        state={contextMenuState}
+        onClose={() => setContextMenuState(null)}
+        onCopyBusiness={(quote) => copyQuoteValue(quote.businessName, "Business")}
+        onCopyContact={(quote) => copyQuoteValue(quote.primaryContactName, "Contact")}
+        onToggleBookmark={toggleQuoteBookmark}
+        onCreateLead={createLeadFromQuote}
+        onArchive={(quote) => setArchiveModalState({ quote, saving: false })}
+        onUnarchive={unarchiveQuote}
+      />
+      <QuoteArchiveModal
+        state={archiveModalState}
+        onClose={() => setArchiveModalState(null)}
+        onConfirm={(quote) => archiveQuote(quote)}
+      />
+    </section>
+  );
+}
+
+function SalesQuoteDetailModal({
+  state,
+  onClose
+}: {
+  state: LoadState<SalesQuoteDetail>;
+  onClose: () => void;
+}) {
+  if (!state.loading && !state.error && !state.data) return null;
+
+  const quote = state.data?.quote;
+  const detail = state.data?.prospectDetail;
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel modal-panel-wide" aria-modal="true" aria-labelledby="quote-detail-title" role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Paymentsense quote</p>
+            <h3 id="quote-detail-title">{quote?.businessName ?? quote?.quoteId ?? "Quote detail"}</h3>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="Close quote detail">
+            <Ban size={16} aria-hidden />
+          </button>
+        </div>
+        <div className="modal-body modal-scroll">
+          {state.loading && <PanelSkeleton compact />}
+          {state.error && <ErrorPanel error={state.error} compact />}
+          {quote && (
+            <>
+              <div className="detail-grid compact-grid">
+                <DetailItem label="Quote ID" value={<span className="mono">{quote.quoteId}</span>} />
+                <DetailItem label="Prospect ID" value={<span className="mono">{quote.prospectId}</span>} />
+                <DetailItem label="Status" value={quote.status} />
+                <DetailItem label="Owner" value={quote.ownerName} />
+                <DetailItem label="Primary contact" value={quote.primaryContactName} />
+                <DetailItem label="Postcode" value={quote.postcode} />
+                <DetailItem label="Commission base" value={formatCurrency(quote.commissionBase)} />
+                <DetailItem label="Commission" value={formatCurrency(quote.commission)} />
+                <DetailItem label="LTV" value={formatCurrency(quote.ltv)} />
+                <DetailItem label="Created" value={formatDateTime(quote.quoteCreatedAt)} />
+                <DetailItem label="Last status change" value={formatDateTime(quote.lastStatusChangeAt)} />
+                <DetailItem label="Last imported" value={formatDateTime(quote.lastSeenAt)} />
+                <DetailItem label="Latest tracked change" value={quote.latestChangeAt ? `${quote.latestChangeSummary ?? "Changed"} on ${formatDateTime(quote.latestChangeAt)}` : "None"} />
+              </div>
+              <div className="row-actions">
+                {quote.quoteUrl && (
+                  <a className="secondary-action" href={quote.quoteUrl} target="_blank" rel="noreferrer">
+                    Quote <ExternalLink size={14} aria-hidden />
+                  </a>
+                )}
+                {quote.prospectUrl && (
+                  <a className="secondary-action" href={quote.prospectUrl} target="_blank" rel="noreferrer">
+                    Prospect <ExternalLink size={14} aria-hidden />
+                  </a>
+                )}
+              </div>
+              {detail ? (
+                <div className="detail-grid">
+                  <DetailItem label="Prospect business" value={detail.businessName} />
+                  <DetailItem label="Channel" value={detail.channel} />
+                  <DetailItem label="Origin" value={detail.origin} />
+                  <DetailItem label="Created on" value={formatDate(detail.createdOn)} />
+                  <DetailItem label="Owner" value={detail.ownerName} />
+                  <DetailItem label="PS customer match" value={detail.hasPaymentsenseCustomerMatch ? "Yes" : "No"} />
+                  <DetailItem label="Contact" value={detail.contact.name} />
+                  <DetailItem label="Phone" value={detail.contact.phone} />
+                  <DetailItem label="Email" value={<CopyableEmail email={detail.contact.email} />} />
+                  <DetailItem label="Address" value={formatAddressParts(detail.address)} />
+                </div>
+              ) : (
+                <EmptyPanel message="No prospect detail has been imported for this quote yet." compact />
+              )}
+              {state.data?.changeHistory?.length ? (
+                <section className="quote-change-history">
+                  <strong>Change history</strong>
+                  {state.data.changeHistory.map((change) => (
+                    <div className="quote-change-entry" key={change.id}>
+                      <div>
+                        <span className="mono">{formatDateTime(change.changedAt)}</span>
+                        <span className="muted"> {change.changeSource.replace("_", " ")}</span>
+                      </div>
+                      <div className="quote-change-fields">
+                        {change.fieldNames.map((fieldName) => (
+                          <span className="match-chip" key={fieldName}>{fieldName}</span>
+                        ))}
+                      </div>
+                      <dl className="quote-change-values">
+                        {change.fieldNames.map((fieldName) => (
+                          <Fragment key={fieldName}>
+                            <dt>{fieldName}</dt>
+                            <dd>
+                              <span>{formatChangeValue(change.previousValues[fieldName])}</span>
+                              <span aria-hidden>-&gt;</span>
+                              <strong>{formatChangeValue(change.newValues[fieldName])}</strong>
+                            </dd>
+                          </Fragment>
+                        ))}
+                      </dl>
+                    </div>
+                  ))}
+                </section>
+              ) : null}
+            </>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function QuoteRowContextMenu({
+  state,
+  onClose,
+  onCopyBusiness,
+  onCopyContact,
+  onToggleBookmark,
+  onCreateLead,
+  onArchive,
+  onUnarchive
+}: {
+  state: QuoteRowContextMenuState | null;
+  onClose: () => void;
+  onCopyBusiness: (quote: SalesQuote) => Promise<void>;
+  onCopyContact: (quote: SalesQuote) => Promise<void>;
+  onToggleBookmark: (quote: SalesQuote) => Promise<void>;
+  onCreateLead: (quote: SalesQuote) => Promise<void>;
+  onArchive: (quote: SalesQuote) => void;
+  onUnarchive: (quote: SalesQuote) => Promise<void>;
+}) {
+  useEffect(() => {
+    if (!state) return;
+
+    function dismiss() {
+      onClose();
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+
+    window.addEventListener("mousedown", dismiss);
+    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("resize", dismiss);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("mousedown", dismiss);
+      window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("resize", dismiss);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose, state]);
+
+  if (!state) return null;
+
+  const quote = state.quote;
+  const canCopyBusiness = Boolean(quote.businessName?.trim());
+  const canCopyContact = Boolean(quote.primaryContactName?.trim());
+  const hasLead = Boolean(quote.createdLeadId);
+
+  return (
+    <div
+      className="customer-context-menu"
+      style={{ left: state.x, top: state.y }}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <button
+        className="customer-context-menu-button"
+        type="button"
+        title={quote.isBookmarked ? "Remove bookmark" : "Bookmark"}
+        onClick={() => {
+          void onToggleBookmark(quote);
+          onClose();
+        }}
+      >
+        {quote.isBookmarked ? <BookmarkCheck size={16} aria-hidden /> : <Bookmark size={16} aria-hidden />}
+      </button>
+      <button
+        className="customer-context-menu-button"
+        type="button"
+        title={canCopyBusiness ? "Copy business" : "No business name"}
+        disabled={!canCopyBusiness}
+        onClick={() => {
+          void onCopyBusiness(quote);
+          onClose();
+        }}
+      >
+        <Copy size={16} aria-hidden />
+        <span>Business</span>
+      </button>
+      <button
+        className="customer-context-menu-button"
+        type="button"
+        title={canCopyContact ? "Copy contact" : "No contact"}
+        disabled={!canCopyContact}
+        onClick={() => {
+          void onCopyContact(quote);
+          onClose();
+        }}
+      >
+        <Copy size={16} aria-hidden />
+        <span>Contact</span>
+      </button>
+      <button
+        className="customer-context-menu-button"
+        type="button"
+        title={hasLead ? `Lead #${quote.createdLeadId} already exists` : "Create lead from quote"}
+        disabled={hasLead || quote.isArchived}
+        onClick={() => {
+          void onCreateLead(quote);
+          onClose();
+        }}
+      >
+        <BadgeCheck size={16} aria-hidden />
+        <span>Create Lead</span>
+      </button>
+      <button
+        className="customer-context-menu-button"
+        type="button"
+        title={quote.isArchived ? "Unarchive quote" : "Archive quote"}
+        onClick={() => {
+          if (quote.isArchived) {
+            void onUnarchive(quote);
+          } else {
+            onArchive(quote);
+          }
+          onClose();
+        }}
+      >
+        <Archive size={16} aria-hidden />
+        <span>{quote.isArchived ? "Unarchive" : "Archive"}</span>
+      </button>
+    </div>
+  );
+}
+
+function QuoteArchiveModal({
+  state,
+  onClose,
+  onConfirm
+}: {
+  state: QuoteArchiveModalState | null;
+  onClose: () => void;
+  onConfirm: (quote: SalesQuote) => Promise<void>;
+}) {
+  if (!state) return null;
+
+  const quote = state.quote;
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel" aria-modal="true" aria-labelledby="quote-archive-title" role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Archive quote</p>
+            <h3 id="quote-archive-title">{quote.businessName ?? quote.quoteId}</h3>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="Close archive confirmation" disabled={state.saving}>
+            <Ban size={16} aria-hidden />
+          </button>
+        </div>
+        <div className="modal-body">
+          <p>Archive this quote? It will be hidden from the active Quotes list, and any lead created from this quote will be changed to closed.</p>
+          <div className="detail-grid compact-grid">
+            <DetailItem label="Quote" value={<span className="mono">{quote.quoteId}</span>} />
+            <DetailItem label="Prospect" value={<span className="mono">{quote.prospectId}</span>} />
+            <DetailItem label="Linked lead" value={quote.createdLeadId ? `Lead #${quote.createdLeadId}` : "None"} />
+          </div>
+          <div className="row-actions">
+            <button className="secondary-action" type="button" onClick={onClose} disabled={state.saving}>
+              Cancel
+            </button>
+            <button className="page-action-button" type="button" onClick={() => void onConfirm(quote)} disabled={state.saving}>
+              {state.saving ? "Archiving..." : "Archive Quote"}
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
@@ -11868,13 +16983,21 @@ function InlineProspectDetailRow({
   detailState,
   customerContext,
   usingCurrentProspect,
-  onUseCurrentProspect
+  onUseCurrentProspect,
+  calendarEntryTypes,
+  users,
+  currentUserId,
+  reviewEntityId
 }: {
   colspan: number;
   detailState: LoadState<ProspectDetail>;
   customerContext?: ProspectTestCustomerContext | null;
   usingCurrentProspect?: boolean;
   onUseCurrentProspect?: () => void;
+  calendarEntryTypes?: CalendarEntryType[];
+  users?: User[];
+  currentUserId?: string;
+  reviewEntityId?: number;
 }) {
   return (
     <tr className="detail-table-row">
@@ -11888,6 +17011,10 @@ function InlineProspectDetailRow({
             customerContext={customerContext}
             usingCurrentProspect={usingCurrentProspect}
             onUseCurrentProspect={onUseCurrentProspect}
+            calendarEntryTypes={calendarEntryTypes}
+            users={users}
+            currentUserId={currentUserId}
+            reviewEntityId={reviewEntityId}
           />
         )}
       </td>
@@ -11901,6 +17028,9 @@ function CustomerMatchDetailRow({
   customerId,
   customer,
   customerValueTypes,
+  calendarEntryTypes,
+  users,
+  currentUserId,
   notesRefreshKey,
   onCustomerValueChanged,
   onOpenLead,
@@ -11913,6 +17043,9 @@ function CustomerMatchDetailRow({
   customerId: number;
   customer: Pick<Customer, "id" | "entityName" | "tradingName" | "postcode" | "hasAiInsightJobScheduled">;
   customerValueTypes: CustomerValueType[];
+  calendarEntryTypes: CalendarEntryType[];
+  users: User[];
+  currentUserId: string;
   notesRefreshKey?: number;
   onCustomerValueChanged: (customerId: number, next: Pick<Customer, "customerValueTypeId" | "customerValueTypeLabel" | "customerValueTypeDecimalValue" | "customerValueTypeShieldOrder" | "customerValueTypeImageFileName">) => void;
   onOpenLead: (leadId: number) => void;
@@ -11931,6 +17064,9 @@ function CustomerMatchDetailRow({
             customerId={customerId}
             customer={customer}
             customerValueTypes={customerValueTypes}
+            calendarEntryTypes={calendarEntryTypes}
+            users={users}
+            currentUserId={currentUserId}
             notesRefreshKey={notesRefreshKey}
             onCustomerValueChanged={onCustomerValueChanged}
             onOpenLead={onOpenLead}
@@ -11949,6 +17085,9 @@ function CustomerMatchPanel({
   customerId,
   customer,
   customerValueTypes,
+  calendarEntryTypes,
+  users,
+  currentUserId,
   notesRefreshKey,
   onCustomerValueChanged,
   onOpenLead,
@@ -11960,6 +17099,9 @@ function CustomerMatchPanel({
   customerId: number;
   customer: Pick<Customer, "id" | "entityName" | "tradingName" | "postcode" | "hasAiInsightJobScheduled">;
   customerValueTypes: CustomerValueType[];
+  calendarEntryTypes: CalendarEntryType[];
+  users: User[];
+  currentUserId: string;
   notesRefreshKey?: number;
   onCustomerValueChanged: (customerId: number, next: Pick<Customer, "customerValueTypeId" | "customerValueTypeLabel" | "customerValueTypeDecimalValue" | "customerValueTypeShieldOrder" | "customerValueTypeImageFileName">) => void;
   onOpenLead: (leadId: number) => void;
@@ -11979,6 +17121,7 @@ function CustomerMatchPanel({
   const [businessTypeModalOpen, setBusinessTypeModalOpen] = useState(false);
   const [businessTypeOptionsState, setBusinessTypeOptionsState] = useState<LoadState<CustomerBusinessTypeOption[]>>({ loading: false });
   const [removingAiInsight, setRemovingAiInsight] = useState(false);
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
 
   const filteredBusinessTypeOptions = useMemo(() => {
     const needle = normalizeMatchText(businessTypeFilter);
@@ -12267,12 +17410,29 @@ function CustomerMatchPanel({
         <button className="secondary-action" type="button" onClick={() => onOpenAiCompanyInsight(customer)}>
           AI Customer Insight
         </button>
+        <button className="secondary-action" type="button" onClick={() => setReviewModalOpen(true)}>
+          Schedule Review
+        </button>
         {!result.aiInsight && customer.hasAiInsightJobScheduled ? (
           <span className="scheduled-insight-badge">Insight Scheduled</span>
         ) : null}
       </div>
     </div>
   );
+  const reviewScheduleModal = reviewModalOpen ? (
+    <ReviewScheduleModal
+      target={{
+        entityType: "customer",
+        entityId: customerId,
+        label: customer.tradingName || customer.entityName,
+        reference: customer.postcode
+      }}
+      calendarEntryTypes={calendarEntryTypes}
+      users={users}
+      currentUserId={currentUserId}
+      onClose={() => setReviewModalOpen(false)}
+    />
+  ) : null;
   const hasCompaniesHouseData = hasCompaniesHouseIdentification(result.aiInsight?.companyNumber);
 
   const aiInsightPanel = result.aiInsight ? (
@@ -12378,6 +17538,7 @@ function CustomerMatchPanel({
           </article>
           <CommercialsEditor
             customerId={customerId}
+            subject="customer"
             title="Commercials"
             value={commercials}
             customerValueTypes={customerValueTypes}
@@ -12416,6 +17577,7 @@ function CustomerMatchPanel({
           </article>
         </div>
         {businessTypeModal}
+        {reviewScheduleModal}
       </section>
     );
   }
@@ -12470,6 +17632,7 @@ function CustomerMatchPanel({
         </article>
         <CommercialsEditor
           customerId={customerId}
+          subject="customer"
           title="Commercials"
           value={commercials}
           customerValueTypes={customerValueTypes}
@@ -12541,18 +17704,21 @@ function CustomerMatchPanel({
         ))}
       </div>
       {businessTypeModal}
+      {reviewScheduleModal}
     </section>
   );
 }
 
 function CommercialsEditor({
   customerId,
+  subject = "customer",
   title,
   value,
   customerValueTypes,
   onSaved
 }: {
   customerId: number;
+  subject?: "customer" | "lead";
   title: string;
   value?: CustomerCommercials;
   customerValueTypes: CustomerValueType[];
@@ -12577,24 +17743,39 @@ function CommercialsEditor({
     setCustomerValueMenuOpen(false);
   }, [value?.customerValueTypeId]);
 
+  const saveUrl = subject === "lead"
+    ? `${apiBase}/api/leads/${customerId}/commercials`
+    : `${apiBase}/api/customers/${customerId}/commercials`;
+  const idSuffix = `${subject}-${customerId}`;
+
+  function readCommercialsPayload(data: CustomerCommercials | { commercials?: CustomerCommercials }): CustomerCommercials | undefined {
+    if (data && typeof data === "object" && "commercials" in data) {
+      return data.commercials;
+    }
+
+    return data as CustomerCommercials;
+  }
+
   async function saveCustomerValueType(nextCustomerValueTypeId: string) {
     const nextSelectedCustomerValueType = customerValueTypes.find((row) => String(row.id) === nextCustomerValueTypeId);
     setSavingCustomerValueType(true);
     setForm((current) => ({ ...current, customerValueTypeId: nextCustomerValueTypeId }));
 
     try {
-      const response = await fetchWithActor(`${apiBase}/api/customers/${customerId}/suppression`, {
+      const response = await fetchWithActor(saveUrl, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          updateSuppression: false,
-          updateCustomerValueType: true,
+          creditCardValue: parseDecimalOrNull(form.creditCardValue),
+          valuePeriod: form.valuePeriod,
+          currentChargePercent: parseDecimalOrNull(form.currentChargePercent),
+          proposedChargePercent: parseDecimalOrNull(form.proposedChargePercent),
           customerValueTypeId: nextCustomerValueTypeId && nextCustomerValueTypeId !== "0" ? Number(nextCustomerValueTypeId) : null
         })
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = (await response.json()) as { commercials?: CustomerCommercials };
-      onSaved(data.commercials ?? {
+      const data = (await response.json()) as CustomerCommercials | { commercials?: CustomerCommercials };
+      onSaved(readCommercialsPayload(data) ?? {
         ...value,
         customerValueTypeId: nextCustomerValueTypeId && nextCustomerValueTypeId !== "0" ? Number(nextCustomerValueTypeId) : undefined,
         customerValueTypeLabel: nextSelectedCustomerValueType?.label,
@@ -12612,12 +17793,10 @@ function CommercialsEditor({
     setSaving(true);
 
     try {
-      const response = await fetchWithActor(`${apiBase}/api/customers/${customerId}/suppression`, {
+      const response = await fetchWithActor(saveUrl, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          updateSuppression: false,
-          updateCustomerValueType: true,
           creditCardValue: parseDecimalOrNull(form.creditCardValue),
           valuePeriod: form.valuePeriod,
           currentChargePercent: parseDecimalOrNull(form.currentChargePercent),
@@ -12626,8 +17805,8 @@ function CommercialsEditor({
         })
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = (await response.json()) as { commercials?: CustomerCommercials };
-      onSaved(data.commercials ?? {
+      const data = (await response.json()) as CustomerCommercials | { commercials?: CustomerCommercials };
+      onSaved(readCommercialsPayload(data) ?? {
         creditCardValue: parseDecimalOrNull(form.creditCardValue) ?? undefined,
         valuePeriod: form.valuePeriod,
         currentChargePercent: parseDecimalOrNull(form.currentChargePercent) ?? undefined,
@@ -12652,10 +17831,10 @@ function CommercialsEditor({
       <form className="search-form compact-form" onSubmit={(event) => void saveCommercials(event)}>
         <div className="table-search-group">
           <div className="table-search">
-            <label htmlFor={`commercials-customer-value-${customerId}`}>Customer value type</label>
+            <label htmlFor={`commercials-customer-value-${idSuffix}`}>Customer value type</label>
             <div className="customer-value-picker">
               <button
-                id={`commercials-customer-value-${customerId}`}
+                id={`commercials-customer-value-${idSuffix}`}
                 className="customer-value-picker-trigger"
                 type="button"
                 disabled={savingCustomerValueType}
@@ -12718,9 +17897,9 @@ function CommercialsEditor({
             </div>
           </div>
           <div className="table-search">
-            <label htmlFor={`commercials-value-${customerId}`}>Credit card value</label>
+            <label htmlFor={`commercials-value-${idSuffix}`}>Credit card value</label>
             <input
-              id={`commercials-value-${customerId}`}
+              id={`commercials-value-${idSuffix}`}
               type="number"
               min="0"
               step="0.01"
@@ -12731,9 +17910,9 @@ function CommercialsEditor({
         </div>
         <div className="table-search-group">
           <div className="table-search">
-            <label htmlFor={`commercials-period-${customerId}`}>Period</label>
+            <label htmlFor={`commercials-period-${idSuffix}`}>Period</label>
             <select
-              id={`commercials-period-${customerId}`}
+              id={`commercials-period-${idSuffix}`}
               className="header-select"
               value={form.valuePeriod}
               onChange={(event) => setForm((current) => ({ ...current, valuePeriod: event.target.value as "monthly" | "yearly" }))}
@@ -12743,9 +17922,9 @@ function CommercialsEditor({
             </select>
           </div>
           <div className="table-search">
-            <label htmlFor={`commercials-current-${customerId}`}>Current charge %</label>
+            <label htmlFor={`commercials-current-${idSuffix}`}>Current charge %</label>
             <input
-              id={`commercials-current-${customerId}`}
+              id={`commercials-current-${idSuffix}`}
               type="number"
               min="0"
               max="100"
@@ -12755,9 +17934,9 @@ function CommercialsEditor({
             />
           </div>
           <div className="table-search">
-            <label htmlFor={`commercials-proposed-${customerId}`}>Proposed rate %</label>
+            <label htmlFor={`commercials-proposed-${idSuffix}`}>Proposed rate %</label>
             <input
-              id={`commercials-proposed-${customerId}`}
+              id={`commercials-proposed-${idSuffix}`}
               type="number"
               min="0"
               max="100"
@@ -12869,6 +18048,76 @@ function BatchFetchModal({
             )}
           </div>
         )}
+      </section>
+    </div>
+  );
+}
+
+function ProspectDeleteWaveWarningModal({
+  state,
+  saving,
+  onClose,
+  onConfirm
+}: {
+  state: { rows: Prospect[]; memberships: ProspectWaveMembership[] } | null;
+  saving: boolean;
+  onClose: () => void;
+  onConfirm: (rows: Prospect[]) => void;
+}) {
+  if (!state) return null;
+
+  const grouped = state.memberships.reduce((map, membership) => {
+    const rows = map.get(membership.prospectId) ?? [];
+    rows.push(membership);
+    map.set(membership.prospectId, rows);
+    return map;
+  }, new Map<number, ProspectWaveMembership[]>());
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel" aria-modal="true" aria-labelledby="prospect-delete-wave-title" role="dialog">
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Prospect Delete</p>
+            <h3 id="prospect-delete-wave-title">Selected prospects are in waves</h3>
+          </div>
+          {!saving && (
+            <button className="modal-close" type="button" onClick={onClose}>
+              Close
+            </button>
+          )}
+        </div>
+        <div className="modal-body">
+          <p>
+            These selected prospects are linked to leads that are already in campaign waves. Deleting will be attempted only after you confirm, and existing lead protections may still block linked prospects.
+          </p>
+          <div className="modal-list">
+            {[...grouped.entries()].map(([prospectId, memberships]) => {
+              const first = memberships[0];
+              return (
+                <article className="detail-card compact-card" key={prospectId}>
+                  <strong>{first.businessName}</strong>
+                  <div className="muted mono">{first.prospectReference}</div>
+                  <div className="ai-insight-chip-grid">
+                    {memberships.map((membership) => (
+                      <span className="match-chip" key={`${membership.leadId}-${membership.waveId}`}>
+                        Lead #{membership.leadId} / {membership.campaignName} / Wave {membership.waveNumber}: {membership.waveName}
+                      </span>
+                    ))}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          <div className="modal-actions">
+            <button className="secondary-action" type="button" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button className="page-action-button destructive-action" type="button" onClick={() => onConfirm(state.rows)} disabled={saving}>
+              {saving ? "Deleting..." : "Continue Delete"}
+            </button>
+          </div>
+        </div>
       </section>
     </div>
   );
@@ -13065,10 +18314,16 @@ function getProspectTestRowClassName(
   return classes.join(" ");
 }
 
-function getLeadLinkedRowClassName(selected: boolean, hasLead: boolean) {
+function getLeadLinkedRowClassName(selected: boolean, hasLead: boolean, selectMode = false, selectModeSelected = false) {
   const classes = ["clickable-row"];
   if (selected) {
     classes.push("selected");
+  }
+  if (selectMode) {
+    classes.push("prospect-select-mode-row");
+  }
+  if (selectModeSelected) {
+    classes.push("prospect-multi-selected-row");
   }
   if (hasLead) {
     classes.push("lead-linked-row");
@@ -13076,10 +18331,23 @@ function getLeadLinkedRowClassName(selected: boolean, hasLead: boolean) {
   return classes.join(" ");
 }
 
-function getCustomerRowClassName(selected: boolean, highlighted: boolean, hasLead: boolean, duplicateCandidate = false) {
+function getCustomerRowClassName(
+  selected: boolean,
+  highlighted: boolean,
+  hasLead: boolean,
+  duplicateCandidate = false,
+  selectMode = false,
+  selectModeSelected = false
+) {
   const classes = ["clickable-row"];
   if (selected) {
     classes.push("selected");
+  }
+  if (selectMode) {
+    classes.push("customer-select-mode-row");
+  }
+  if (selectModeSelected) {
+    classes.push("customer-multi-selected-row");
   }
   if (highlighted) {
     classes.push("return-highlight-row");
@@ -13192,7 +18460,12 @@ function renderCustomerStatus(
   customerValueTypeImageFileName?: string,
   attachedProspectCount?: number,
   onOpenNotes?: (() => void) | null,
-  onOpenOwnedChecklist?: (() => void) | null
+  onOpenOwnedChecklist?: (() => void) | null,
+  customerValueType?: {
+    label?: string;
+    decimalValue?: number;
+    shieldOrder?: number;
+  }
 ) {
   const isCancelled = status === "cancelled";
   const isCustomer = !status && customerKind === "customer";
@@ -13299,17 +18572,26 @@ function renderCustomerStatus(
   }
 
   if (customerValueTypeImageFileName) {
+    const customerValueTooltip = [
+      customerValueType?.label || (customerValueType?.shieldOrder ? `Shield ${customerValueType.shieldOrder}` : "Customer value type"),
+      typeof customerValueType?.decimalValue === "number" ? formatCurrency(customerValueType.decimalValue) : null
+    ].filter(Boolean).join(" - ");
     icons.push(
       wrapStatusIcon(
-        <span className="customer-status-icon customer-value-shield">
+        <button
+          className="customer-status-icon customer-value-shield customer-status-button"
+          type="button"
+          aria-label={customerValueTooltip}
+          onClick={(event) => event.stopPropagation()}
+        >
           <img
             className="customer-status-shield-image"
             src={getCustomerValueTypeImagePath(customerValueTypeImageFileName)}
             alt=""
             aria-hidden="true"
           />
-        </span>,
-        "Customer value type",
+        </button>,
+        customerValueTooltip,
         "customer-value-shield"
       )
     );
@@ -13338,6 +18620,8 @@ function getProspectPageSortValue(row: Prospect, key: ProspectPageSortKey) {
       return row.businessName ?? "";
     case "contactName":
       return row.contactName ?? "";
+    case "ownerName":
+      return row.ownerName ?? "";
     case "postcode":
       return row.postcode ?? "";
     case "addedAt":
@@ -13422,7 +18706,7 @@ function getDashboardLeadSortValue(
 
 function getWaveLeadSortValue(
   row: Lead,
-  key: "id" | "customerName" | "tradingName" | "postcode" | "leadPriority" | "leadStatus"
+  key: "id" | "customerName" | "tradingName" | "postcode" | "leadPriority" | "leadStatus" | "responseStatus"
 ) {
   switch (key) {
     case "id":
@@ -13437,6 +18721,34 @@ function getWaveLeadSortValue(
       return leadPriorityRank[row.leadPriority ?? "medium"].toString().padStart(12, "0");
     case "leadStatus":
       return row.leadStatus ?? "";
+    case "responseStatus":
+      return row.responseStatus ?? "";
+  }
+}
+
+function getQuoteSortValue(
+  row: SalesQuote,
+  key: "quoteId" | "businessName" | "primaryContactName" | "status" | "postcode" | "commissionBase" | "commission" | "quoteCreatedAt" | "lastStatusChangeAt"
+) {
+  switch (key) {
+    case "quoteId":
+      return row.quoteId;
+    case "businessName":
+      return row.businessName ?? "";
+    case "primaryContactName":
+      return row.primaryContactName ?? "";
+    case "status":
+      return row.status ?? "";
+    case "postcode":
+      return row.postcode ?? "";
+    case "commissionBase":
+      return (row.commissionBase ?? 0).toString().padStart(16, "0");
+    case "commission":
+      return (row.commission ?? 0).toString().padStart(16, "0");
+    case "quoteCreatedAt":
+      return row.quoteCreatedAt ?? "";
+    case "lastStatusChangeAt":
+      return row.lastStatusChangeAt ?? "";
   }
 }
 
@@ -13475,6 +18787,18 @@ function parseDateTimeFilter(value?: string) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+function parseDateFilterStart(value?: string) {
+  if (!value?.trim()) return null;
+  const parsed = Date.parse(`${value}T00:00:00`);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function parseDateFilterEnd(value?: string) {
+  if (!value?.trim()) return null;
+  const parsed = Date.parse(`${value}T23:59:59.999`);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 function parseRowDateTime(value?: string) {
   if (!value) return null;
   const parsed = Date.parse(value);
@@ -13507,6 +18831,41 @@ function ApiStatus() {
 
 function StatusBanner({ kind, message }: { kind: "success" | "error"; message: string }) {
   return <div className={`banner ${kind}`}>{message}</div>;
+}
+
+function DataChangeBanner({
+  notice,
+  scope,
+  onRefresh
+}: {
+  notice: DataChangeNotice;
+  scope: "dashboard" | "customers" | "prospects" | "leads";
+  onRefresh: () => void;
+}) {
+  const latest = notice.latestEvent;
+  const changedParts = [
+    notice.customerCount ? `${notice.customerCount} customer change${notice.customerCount === 1 ? "" : "s"}` : null,
+    notice.prospectCount ? `${notice.prospectCount} prospect change${notice.prospectCount === 1 ? "" : "s"}` : null,
+    notice.leadCount ? `${notice.leadCount} lead change${notice.leadCount === 1 ? "" : "s"}` : null
+  ].filter(Boolean).join(" and ");
+  const label = scope === "dashboard" ? "Refresh Dashboard" : scope === "leads" ? "Refresh Leads" : "Refresh List";
+
+  return (
+    <div className="data-change-banner" role="status">
+      <div>
+        <strong>{changedParts || "Data changes"} available.</strong>
+        {latest ? (
+          <span>
+            {" "}
+            Latest: {latest.title} by {latest.actorName ?? "Unknown user"} at {formatDateTime(latest.createdAt)}.
+          </span>
+        ) : null}
+      </div>
+      <button className="secondary-action" type="button" onClick={onRefresh}>
+        {label}
+      </button>
+    </div>
+  );
 }
 
 function ActivityEventList({ state }: { state: LoadState<ActivityEvent[]> }) {
@@ -13799,10 +19158,46 @@ function useApi<T>(path: string, refreshKey: number, actorDependency?: string): 
   return state;
 }
 
+function buildDataChangeNotice(events: ActivityEvent[], acknowledgedEventId: number): DataChangeNotice {
+  const relevant = events
+    .filter((event) => event.id > acknowledgedEventId && isCustomerProspectOrLeadDataEvent(event))
+    .sort((left, right) => right.id - left.id);
+  const customerCount = relevant.filter(isCustomerDataEvent).length;
+  const prospectCount = relevant.filter(isProspectDataEvent).length;
+  const leadCount = relevant.filter(isLeadDataEvent).length;
+
+  return {
+    latestEventId: relevant[0]?.id ?? acknowledgedEventId,
+    latestEvent: relevant[0],
+    customerCount,
+    prospectCount,
+    leadCount,
+    totalCount: relevant.length
+  };
+}
+
+function isCustomerProspectOrLeadDataEvent(event: ActivityEvent) {
+  return isCustomerDataEvent(event) || isProspectDataEvent(event) || isLeadDataEvent(event);
+}
+
+function isCustomerDataEvent(event: ActivityEvent) {
+  return event.entityType === "customer" || event.eventType.startsWith("customer.");
+}
+
+function isProspectDataEvent(event: ActivityEvent) {
+  return event.entityType === "prospect" || event.eventType.startsWith("prospect.");
+}
+
+function isLeadDataEvent(event: ActivityEvent) {
+  return event.entityType === "lead" || event.eventType.startsWith("lead.");
+}
+
 function formatJobTypeLabel(jobType: string) {
   switch (jobType) {
     case "ai_company_insight":
       return "AI Company Insight";
+    case "paymentsense_quotes_refresh":
+      return "Paymentsense Quotes Refresh";
     default:
       return jobType.replace(/_/g, " ");
   }
@@ -13877,12 +19272,255 @@ function formatDate(value?: string) {
   }).format(parsed);
 }
 
+function buildCsv(headers: string[], rows: Array<Array<string | number | boolean | null | undefined>>) {
+  return [headers, ...rows]
+    .map((row) => row.map(csvValue).join(","))
+    .join("\r\n");
+}
+
+function csvValue(value: string | number | boolean | null | undefined) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, "\"\"")}"`;
+}
+
+function downloadTextFile(contents: string, filename: string, type: string) {
+  const blob = new Blob([`\uFEFF${contents}`], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function toDateInput(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toDateTimeLocalInput(value: Date) {
+  const hours = String(value.getHours()).padStart(2, "0");
+  const minutes = String(value.getMinutes()).padStart(2, "0");
+  return `${toDateInput(value)}T${hours}:${minutes}`;
+}
+
+function hasCalendarTime(value: string) {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value);
+}
+
+function parseDateInput(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) {
+    return new Date();
+  }
+
+  return new Date(year, month - 1, day);
+}
+
+function addDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function addMinutes(value: Date, minutes: number) {
+  const next = new Date(value);
+  next.setMinutes(next.getMinutes() + minutes);
+  return next;
+}
+
+function addMonths(value: Date, months: number) {
+  const next = new Date(value);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function dateInRange(value: Date, from: Date, to: Date) {
+  const time = value.getTime();
+  return time >= from.getTime() && time <= to.getTime();
+}
+
+function rangesOverlap(leftStart: Date, leftEnd: Date, rightStart: Date, rightEnd: Date) {
+  return leftStart.getTime() <= rightEnd.getTime() && leftEnd.getTime() >= rightStart.getTime();
+}
+
+function startOfWeek(value: Date) {
+  const next = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  const day = next.getDay();
+  const offset = day === 0 ? -6 : 1 - day;
+  next.setDate(next.getDate() + offset);
+  return next;
+}
+
+function groupCalendarEntries(entries: CalendarEntry[], mode: CalendarMode) {
+  const groups = new Map<string, { key: string; label: string; entries: CalendarEntry[] }>();
+  entries.forEach((entry) => {
+    const date = new Date(entry.startsAt ?? entry.createdAt);
+    let key: string;
+    let label: string;
+    if (mode === "year") {
+      key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      label = new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(date);
+    } else {
+      key = toDateInput(date);
+      label = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).format(date);
+    }
+
+    if (!groups.has(key)) {
+      groups.set(key, { key, label, entries: [] });
+    }
+    groups.get(key)!.entries.push(entry);
+  });
+
+  return [...groups.values()].map((group) => ({
+    ...group,
+    entries: group.entries.sort((left, right) =>
+      new Date(left.startsAt ?? left.createdAt).getTime() - new Date(right.startsAt ?? right.createdAt).getTime())
+  }));
+}
+
+function formatCalendarEntryTime(entry: CalendarEntry) {
+  const start = entry.startsAt ? formatDateTime(entry.startsAt) : formatDateTime(entry.createdAt);
+  const end = entry.endsAt ? formatDateTime(entry.endsAt) : "";
+  return end ? `${start} to ${end}` : start;
+}
+
+function formatCalendarEntryShortTime(entry: CalendarEntry) {
+  const start = entry.startsAt ? formatTimeOnly(new Date(entry.startsAt)) : formatTimeOnly(new Date(entry.createdAt));
+  const end = entry.endsAt ? formatTimeOnly(new Date(entry.endsAt)) : "";
+  return end ? `${start}-${end}` : start;
+}
+
+function getCalendarEntryNavigation(entry: CalendarEntry): CalendarSourceNavigation | null {
+  const type = entry.sourceEntityType?.trim().toLowerCase();
+  if ((type === "customer" || type === "prospect") && entry.sourceEntityId && entry.sourceEntityId > 0) {
+    return {
+      entityType: type,
+      entityId: entry.sourceEntityId,
+      title: entry.title
+    };
+  }
+
+  return null;
+}
+
+function formatTimeOnly(value: Date) {
+  return new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(value);
+}
+
+function isEntryForUser(entry: CalendarEntry, userId: number) {
+  return entry.participantUserIds.includes(userId) || entry.ownerUserId === userId;
+}
+
+function getCalendarDayPlacement(entry: CalendarEntry, dayStart: Date, dayEnd: Date) {
+  const start = new Date(entry.startsAt ?? entry.createdAt);
+  const end = new Date(entry.endsAt ?? entry.startsAt ?? entry.createdAt);
+  const clippedStart = new Date(Math.max(start.getTime(), dayStart.getTime()));
+  const clippedEnd = new Date(Math.min(Math.max(end.getTime(), start.getTime() + 30 * 60 * 1000), dayEnd.getTime()));
+  if (clippedEnd <= dayStart || clippedStart >= dayEnd || clippedEnd <= clippedStart) {
+    return null;
+  }
+
+  const dayMs = dayEnd.getTime() - dayStart.getTime();
+  const left = ((clippedStart.getTime() - dayStart.getTime()) / dayMs) * 100;
+  const width = Math.max(2, ((clippedEnd.getTime() - clippedStart.getTime()) / dayMs) * 100);
+  return { left, width, start: clippedStart, end: clippedEnd };
+}
+
+function getCalendarDayVerticalPlacement(entry: CalendarEntry, dayStart: Date, dayEnd: Date) {
+  const placement = getCalendarDayPlacement(entry, dayStart, dayEnd);
+  if (!placement) return null;
+  const pixelsPerHour = 72;
+  const top = ((placement.start.getTime() - dayStart.getTime()) / (60 * 60 * 1000)) * pixelsPerHour;
+  const height = Math.max(34, ((placement.end.getTime() - placement.start.getTime()) / (60 * 60 * 1000)) * pixelsPerHour);
+  return { top, height };
+}
+
+function splitDateTimeLocal(value: string) {
+  const [date = toDateInput(new Date()), rawTime = "09:00"] = value.split("T");
+  return { date, time: rawTime.slice(0, 5) || "09:00" };
+}
+
+function combineDateAndTime(date: string, time: string) {
+  return `${date || toDateInput(new Date())}T${time || "09:00"}`;
+}
+
+function buildCalendarDayBusyBlocks(entries: CalendarEntry[], dayStart: Date, dayEnd: Date) {
+  return entries
+    .map((entry) => getCalendarDayPlacement(entry, dayStart, dayEnd))
+    .filter((block): block is { left: number; width: number; start: Date; end: Date } => Boolean(block))
+    .sort((left, right) => left.start.getTime() - right.start.getTime())
+    .reduce((blocks, block) => {
+      const previous = blocks.at(-1);
+      if (previous && block.start <= previous.end) {
+        previous.end = new Date(Math.max(previous.end.getTime(), block.end.getTime()));
+        return blocks;
+      }
+
+      blocks.push({ ...block });
+      return blocks;
+    }, [] as Array<{ left: number; width: number; start: Date; end: Date }>);
+}
+
+function buildCalendarFreeBlocks(busyBlocks: Array<{ start: Date; end: Date }>, dayStart: Date, dayEnd: Date) {
+  const freeBlocks: Array<{ start: Date; end: Date }> = [];
+  let cursor = new Date(dayStart);
+  busyBlocks.forEach((block) => {
+    if (block.start > cursor) {
+      freeBlocks.push({ start: new Date(cursor), end: new Date(block.start) });
+    }
+    if (block.end > cursor) {
+      cursor = new Date(block.end);
+    }
+  });
+
+  if (cursor < dayEnd) {
+    freeBlocks.push({ start: cursor, end: new Date(dayEnd) });
+  }
+
+  return freeBlocks.filter((block) => block.end.getTime() - block.start.getTime() >= 15 * 60 * 1000);
+}
+
+function formatFreeSlotSummary(freeBlocks: Array<{ start: Date; end: Date }>) {
+  const totalMinutes = freeBlocks.reduce((total, block) => total + Math.round((block.end.getTime() - block.start.getTime()) / 60000), 0);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h${minutes ? ` ${minutes}m` : ""} free`;
+}
+
+function readDownloadFileName(contentDisposition: string | null) {
+  if (!contentDisposition) return null;
+  const utfMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utfMatch?.[1]) return decodeURIComponent(utfMatch[1].replace(/"/g, ""));
+  const match = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return match?.[1] ?? null;
+}
+
 function formatCurrency(value?: number | null) {
   if (value === null || value === undefined || Number.isNaN(value)) return "";
   return new Intl.NumberFormat("en-GB", {
     style: "currency",
     currency: "GBP"
   }).format(value);
+}
+
+function formatChangeValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "blank";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
+  if (typeof value === "string") {
+    const dateText = formatDateTime(value);
+    return dateText || value;
+  }
+
+  return JSON.stringify(value);
 }
 
 function parseDecimalOrNull(value: string) {
@@ -13961,13 +19599,17 @@ function formatAddress(row: CustomerSearchRow) {
 }
 
 function formatProspectAddress(detail: ProspectDetail) {
+  return formatAddressParts(detail.address);
+}
+
+function formatAddressParts(address: ProspectAddress) {
   return [
-    detail.address.line1,
-    detail.address.line2,
-    detail.address.town,
-    detail.address.county,
-    detail.address.postcode,
-    detail.address.country
+    address.line1,
+    address.line2,
+    address.town,
+    address.county,
+    address.postcode,
+    address.country
   ].filter(Boolean).join(", ");
 }
 
