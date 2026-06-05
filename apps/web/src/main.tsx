@@ -15445,6 +15445,36 @@ function CampaignsView({
     void loadWaveLeads(selectedWaveId);
   }, [latestActivityEvent?.id, selectedWaveId]);
 
+  useEffect(() => {
+    if (!selectedWaveId) return;
+
+    const source = new EventSource(`${apiBase}/api/activity-events/stream`);
+    source.addEventListener("activity", (event) => {
+      try {
+        const activity = JSON.parse((event as MessageEvent).data) as ActivityEvent;
+        if (
+          activity.eventType === "telesales.sync.saved" &&
+          activity.entityType === "campaign_wave" &&
+          activity.entityId === selectedWaveId
+        ) {
+          void loadWaveLeads(selectedWaveId);
+          void checkWaveTelesalesInteractions(selectedWaveId, { notify: false });
+        }
+      } catch {
+        // Ignore malformed live messages; the manual Check Telesales action remains available.
+      }
+    });
+
+    const fallbackTimer = window.setInterval(() => {
+      void checkWaveTelesalesInteractions(selectedWaveId, { notify: false });
+    }, 15000);
+
+    return () => {
+      source.close();
+      window.clearInterval(fallbackTimer);
+    };
+  }, [selectedWaveId]);
+
   function downloadWaveCsv(waveId: number) {
     const link = document.createElement("a");
     link.href = `${apiBase}/api/campaign-waves/${waveId}/export`;
@@ -15464,7 +15494,9 @@ function CampaignsView({
   }
 
   async function checkWaveTelesalesInteractions(waveId: number, options: { notify?: boolean } = { notify: true }) {
-    setWaveInteractionState({ loading: true });
+    setWaveInteractionState((current) => options.notify === false
+      ? { ...current, loading: true, error: undefined }
+      : { loading: true });
     if (options.notify !== false) {
       setNotice(null);
     }
