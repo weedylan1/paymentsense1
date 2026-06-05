@@ -3028,6 +3028,18 @@ tr:last-child td {
   width: min(100%, 860px);
 }
 
+.wave-manage-modal {
+  max-width: 1180px;
+  width: min(100%, 1180px);
+}
+
+.wave-copy-action {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .modal-header,
 .modal-body,
 .modal-actions {
@@ -3071,6 +3083,61 @@ tr:last-child td {
 .modal-scroll {
   max-height: min(70vh, 760px);
   overflow: auto;
+}
+
+.wave-manage-section {
+  border: 1px solid #e0e6e3;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+}
+
+.wave-manage-section-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.wave-manage-section-header h4 {
+  font-size: 16px;
+  line-height: 22px;
+  margin: 0;
+}
+
+.wave-manage-section-header p {
+  color: #52605a;
+  font-size: 13px;
+  line-height: 18px;
+  margin-top: 2px;
+}
+
+.wave-manage-leads-table {
+  border: 1px solid #e8ecea;
+  border-radius: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.wave-manage-leads-table table {
+  margin: 0;
+}
+
+.wave-manage-leads-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.wave-manage-leads-table input[type="checkbox"] {
+  height: 18px;
+  width: 18px;
+}
+
+.selected-row {
+  background: #eef7f4;
 }
 
 .interaction-timeline {

@@ -3000,6 +3000,176 @@ app.MapPost("/api/campaigns/{campaignId:long}/waves", async (NpgsqlDataSource db
     return updated is null ? Results.NotFound(new { error = "Campaign not found." }) : Results.Ok(updated);
 });
 
+app.MapPatch("/api/campaign-waves/{waveId:long}", async (NpgsqlDataSource db, HttpRequest httpRequest, long waveId, CampaignWaveUpdateRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Name))
+    {
+        return Results.BadRequest(new { error = "Wave name is required." });
+    }
+
+    if (request.WaveNumber <= 0)
+    {
+        return Results.BadRequest(new { error = "Wave number must be greater than zero." });
+    }
+
+    const string sql = """
+        update paymentsense_core.campaign_waves
+        set name = @name,
+            wave_number = @wave_number,
+            channel = @channel,
+            scheduled_date = @scheduled_date,
+            status = @status,
+            assigned_team_or_user = @assigned_team_or_user,
+            updated_at = now()
+        where id = @wave_id
+        returning campaign_id
+        """;
+
+    long? campaignId;
+    await using (var command = db.CreateCommand(sql))
+    {
+        command.Parameters.AddWithValue("wave_id", waveId);
+        command.Parameters.AddWithValue("name", request.Name.Trim());
+        command.Parameters.AddWithValue("wave_number", request.WaveNumber);
+        command.Parameters.AddWithValue("channel", string.IsNullOrWhiteSpace(request.Channel) ? "Mixed" : request.Channel.Trim());
+        command.Parameters.AddWithValue("scheduled_date", (object?)ParseDateOrNull(request.ScheduledDate) ?? DBNull.Value);
+        command.Parameters.AddWithValue("status", string.IsNullOrWhiteSpace(request.Status) ? "Planned" : request.Status.Trim());
+        command.Parameters.AddWithValue("assigned_team_or_user", (object?)NullIfBlank(request.AssignedTeamOrUser) ?? DBNull.Value);
+        campaignId = (long?)await command.ExecuteScalarAsync();
+    }
+
+    if (campaignId is null)
+    {
+        return Results.NotFound(new { error = "Wave not found." });
+    }
+
+    var actor = await ResolveActivityActorAsync(db, httpRequest);
+    await LogActivityEventAsync(db, new ActivityEventCreateRequest(
+        "campaign.wave.updated",
+        "campaign_wave",
+        waveId,
+        actor.UserId,
+        actor.Name,
+        "Campaign wave updated",
+        $"Wave {request.WaveNumber}: {request.Name.Trim()} was updated.",
+        true));
+
+    var campaigns = await LoadCampaignsAsync(db);
+    var updated = campaigns.FirstOrDefault(campaign => campaign.Id == campaignId.Value);
+    return updated is null ? Results.NotFound(new { error = "Campaign not found." }) : Results.Ok(updated);
+});
+
+app.MapPost("/api/campaign-waves/{waveId:long}/copy", async (NpgsqlDataSource db, HttpRequest httpRequest, long waveId, CampaignWaveCopyRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Name))
+    {
+        return Results.BadRequest(new { error = "Wave name is required." });
+    }
+
+    if (request.WaveNumber <= 0)
+    {
+        return Results.BadRequest(new { error = "Wave number must be greater than zero." });
+    }
+
+    var leadIds = (request.LeadIds ?? Array.Empty<long>())
+        .Where(id => id > 0)
+        .Distinct()
+        .ToArray();
+
+    await using var connection = await db.OpenConnectionAsync();
+    await using var transaction = await connection.BeginTransactionAsync();
+
+    long campaignId;
+    await using (var lookupCommand = connection.CreateCommand())
+    {
+        lookupCommand.Transaction = transaction;
+        lookupCommand.CommandText = """
+            select campaign_id
+            from paymentsense_core.campaign_waves
+            where id = @wave_id
+            """;
+        lookupCommand.Parameters.AddWithValue("wave_id", waveId);
+        var campaignIdValue = await lookupCommand.ExecuteScalarAsync();
+        if (campaignIdValue is null)
+        {
+            return Results.NotFound(new { error = "Wave not found." });
+        }
+
+        campaignId = (long)campaignIdValue;
+    }
+
+    long newWaveId;
+    await using (var insertWaveCommand = connection.CreateCommand())
+    {
+        insertWaveCommand.Transaction = transaction;
+        insertWaveCommand.CommandText = """
+            insert into paymentsense_core.campaign_waves (
+              campaign_id,
+              name,
+              wave_number,
+              channel,
+              scheduled_date,
+              status,
+              assigned_team_or_user,
+              updated_at
+            )
+            values (
+              @campaign_id,
+              @name,
+              @wave_number,
+              @channel,
+              @scheduled_date,
+              @status,
+              @assigned_team_or_user,
+              now()
+            )
+            returning id
+            """;
+        insertWaveCommand.Parameters.AddWithValue("campaign_id", campaignId);
+        insertWaveCommand.Parameters.AddWithValue("name", request.Name.Trim());
+        insertWaveCommand.Parameters.AddWithValue("wave_number", request.WaveNumber);
+        insertWaveCommand.Parameters.AddWithValue("channel", string.IsNullOrWhiteSpace(request.Channel) ? "Mixed" : request.Channel.Trim());
+        insertWaveCommand.Parameters.AddWithValue("scheduled_date", (object?)ParseDateOrNull(request.ScheduledDate) ?? DBNull.Value);
+        insertWaveCommand.Parameters.AddWithValue("status", string.IsNullOrWhiteSpace(request.Status) ? "Planned" : request.Status.Trim());
+        insertWaveCommand.Parameters.AddWithValue("assigned_team_or_user", (object?)NullIfBlank(request.AssignedTeamOrUser) ?? DBNull.Value);
+        newWaveId = (long)(await insertWaveCommand.ExecuteScalarAsync() ?? 0L);
+    }
+
+    var copiedLeadCount = 0;
+    if (leadIds.Length > 0)
+    {
+        await using var copyLeadsCommand = connection.CreateCommand();
+        copyLeadsCommand.Transaction = transaction;
+        copyLeadsCommand.CommandText = """
+            insert into paymentsense_core.campaign_wave_leads (campaign_wave_id, lead_id)
+            select @new_wave_id, cwl.lead_id
+            from paymentsense_core.campaign_wave_leads cwl
+            where cwl.campaign_wave_id = @source_wave_id
+              and cwl.lead_id = any(@lead_ids)
+            on conflict (campaign_wave_id, lead_id) do nothing
+            """;
+        copyLeadsCommand.Parameters.AddWithValue("new_wave_id", newWaveId);
+        copyLeadsCommand.Parameters.AddWithValue("source_wave_id", waveId);
+        copyLeadsCommand.Parameters.AddWithValue("lead_ids", leadIds);
+        copiedLeadCount = await copyLeadsCommand.ExecuteNonQueryAsync();
+    }
+
+    await transaction.CommitAsync();
+
+    var actor = await ResolveActivityActorAsync(db, httpRequest);
+    await LogActivityEventAsync(db, new ActivityEventCreateRequest(
+        "campaign.wave.copied",
+        "campaign_wave",
+        newWaveId,
+        actor.UserId,
+        actor.Name,
+        "Campaign wave copied",
+        $"Wave {request.WaveNumber}: {request.Name.Trim()} was copied with {copiedLeadCount} lead{(copiedLeadCount == 1 ? "" : "s")}.",
+        true));
+
+    return Results.Ok(new { waveId = newWaveId, copiedLeadCount });
+});
+
 app.MapPost("/api/campaign-waves/{waveId:long}/leads", async (NpgsqlDataSource db, long waveId, CampaignWaveLeadAssignRequest request) =>
 {
     if (request.LeadIds is null || request.LeadIds.Count == 0)
@@ -3123,6 +3293,63 @@ app.MapPatch("/api/campaign-waves/{waveId:long}/leads/{leadId:long}/response-sta
     return updated > 0
         ? Results.Ok(new { updated = true, responseStatus })
         : Results.NotFound(new { error = "Lead was not found in that wave." });
+});
+
+app.MapPatch("/api/campaign-waves/{waveId:long}/leads/status", async (NpgsqlDataSource db, HttpRequest httpRequest, long waveId, CampaignWaveLeadBulkStatusUpdateRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.LeadStatus))
+    {
+        return Results.BadRequest(new { error = "Lead status is required." });
+    }
+
+    var leadStatus = request.LeadStatus.Trim();
+    if (!await LeadStatusExistsAsync(db, leadStatus))
+    {
+        return Results.BadRequest(new { error = "The selected lead status could not be found." });
+    }
+
+    var leadIds = (request.LeadIds ?? Array.Empty<long>())
+        .Where(id => id > 0)
+        .Distinct()
+        .ToArray();
+
+    if (leadIds.Length == 0)
+    {
+        return Results.BadRequest(new { error = "Select at least one lead." });
+    }
+
+    await using var command = db.CreateCommand("""
+        update paymentsense_core.leads l
+        set lead_status = @lead_status,
+            updated_at = now()
+        where l.id = any(@lead_ids)
+          and exists (
+            select 1
+            from paymentsense_core.campaign_wave_leads cwl
+            where cwl.campaign_wave_id = @wave_id
+              and cwl.lead_id = l.id
+          )
+        """);
+    command.Parameters.AddWithValue("wave_id", waveId);
+    command.Parameters.AddWithValue("lead_ids", leadIds);
+    command.Parameters.AddWithValue("lead_status", leadStatus);
+    var updated = await command.ExecuteNonQueryAsync();
+
+    if (updated > 0)
+    {
+        var actor = await ResolveActivityActorAsync(db, httpRequest);
+        await LogActivityEventAsync(db, new ActivityEventCreateRequest(
+            "campaign.wave.lead_status_reset",
+            "campaign_wave",
+            waveId,
+            actor.UserId,
+            actor.Name,
+            "Wave lead statuses reset",
+            $"{updated} lead status{(updated == 1 ? "" : "es")} reset to {leadStatus}.",
+            true));
+    }
+
+    return Results.Ok(new { updated });
 });
 
 app.MapDelete("/api/campaign-waves/{waveId:long}/leads/{leadId:long}", async (NpgsqlDataSource db, HttpRequest httpRequest, long waveId, long leadId) =>
@@ -14131,8 +14358,11 @@ internal sealed record CampaignResponse(long Id, string Name, string? Descriptio
 internal sealed record CampaignWaveResponse(long Id, long CampaignId, string Name, int WaveNumber, string Channel, DateOnly? ScheduledDate, string Status, string? AssignedTeamOrUser, DateTime CreatedAt, DateTime? LastTelesaleSentAt, int TelesaleSendCount, string? TelesaleUsers);
 internal sealed record CampaignCreateRequest(string Name, string? Description, string? Objective, string? StartDate, string? EndDate, string? TargetAudience, string? Budget, string? ProductService, string? Status);
 internal sealed record CampaignWaveCreateRequest(string Name, int WaveNumber, string? Channel, string? ScheduledDate, string? Status, string? AssignedTeamOrUser);
+internal sealed record CampaignWaveUpdateRequest(string Name, int WaveNumber, string? Channel, string? ScheduledDate, string? Status, string? AssignedTeamOrUser);
+internal sealed record CampaignWaveCopyRequest(string Name, int WaveNumber, string? Channel, string? ScheduledDate, string? Status, string? AssignedTeamOrUser, IReadOnlyList<long>? LeadIds);
 internal sealed record CampaignWaveLeadAssignRequest(IReadOnlyList<long> LeadIds);
 internal sealed record CampaignWaveLeadResponseStatusUpdateRequest(string? ResponseStatus);
+internal sealed record CampaignWaveLeadBulkStatusUpdateRequest(string LeadStatus, IReadOnlyList<long>? LeadIds);
 internal sealed record CampaignWaveTelesaleSendRequest(IReadOnlyList<long>? UserIds);
 internal sealed record CampaignWaveTelesaleExportPayload(string Json, int LeadCount);
 internal sealed record TelesaleLeadInstructionCreateRequest(string? InstructionText, string? Priority);

@@ -696,6 +696,21 @@ type TelesaleWaveSendModalState = {
   saving: boolean;
 };
 
+type WaveManageModalState = {
+  campaign: Campaign;
+  wave: CampaignWave;
+  editForm: CampaignWaveFormState;
+  copyForm: CampaignWaveFormState;
+  leads: LoadState<Lead[]>;
+  selectedLeadIds: Record<number, boolean>;
+  searchText: string;
+  priorityFilter: string;
+  statusFilter: string;
+  responseStatusFilter: string;
+  bulkLeadStatus: string;
+  savingAction?: "edit" | "copy" | "reset";
+};
+
 type TelesaleLeadInteractionSummary = {
   leadId: number;
   interactionCount: number;
@@ -15200,11 +15215,77 @@ function CampaignsView({
   const [waveLeadSortKey, setWaveLeadSortKey] = useState<"id" | "customerName" | "tradingName" | "postcode" | "leadPriority" | "leadStatus" | "responseStatus">("id");
   const [waveLeadSortDirection, setWaveLeadSortDirection] = useState<SortDirection>("asc");
   const [telesaleSendModal, setTelesaleSendModal] = useState<TelesaleWaveSendModalState | null>(null);
+  const [waveManageModal, setWaveManageModal] = useState<WaveManageModalState | null>(null);
   const [waveInteractionState, setWaveInteractionState] = useState<LoadState<TelesaleLeadInteractionSummary[]>>({ loading: false });
   const [telesaleInteractionModal, setTelesaleInteractionModal] = useState<TelesaleLeadInteractionModalState | null>(null);
   const [waveLeadContactHistoryModal, setWaveLeadContactHistoryModal] = useState<WaveLeadContactHistoryModalState | null>(null);
   const [waveLeadTelesalesInstructionModal, setWaveLeadTelesalesInstructionModal] = useState<WaveLeadTelesalesInstructionModalState | null>(null);
   const telesaleUsers = users.filter((user) => user.userType === "Telesale");
+
+  function waveToForm(wave: CampaignWave): CampaignWaveFormState {
+    return {
+      name: wave.name,
+      waveNumber: String(wave.waveNumber),
+      channel: wave.channel || "Mixed",
+      scheduledDate: wave.scheduledDate ?? "",
+      status: wave.status || "Planned",
+      assignedTeamOrUser: wave.assignedTeamOrUser ?? ""
+    };
+  }
+
+  function buildCopyWaveForm(campaign: Campaign, wave: CampaignWave): CampaignWaveFormState {
+    const nextWaveNumber = Math.max(0, ...campaign.waves.map((row) => row.waveNumber)) + 1;
+    return {
+      ...waveToForm(wave),
+      name: `${wave.name} Copy`,
+      waveNumber: String(nextWaveNumber),
+      status: "Planned"
+    };
+  }
+
+  async function openWaveManageModal(campaign: Campaign, wave: CampaignWave) {
+    setNotice(null);
+    setWaveManageModal({
+      campaign,
+      wave,
+      editForm: waveToForm(wave),
+      copyForm: buildCopyWaveForm(campaign, wave),
+      leads: { loading: true },
+      selectedLeadIds: {},
+      searchText: "",
+      priorityFilter: "all",
+      statusFilter: "all",
+      responseStatusFilter: "all",
+      bulkLeadStatus: leadStatuses[0]?.name ?? "",
+      savingAction: undefined
+    });
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${wave.id}/leads`);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      const leads = (await response.json()) as Lead[];
+      const selectedLeadIds = Object.fromEntries(leads.map((lead) => [lead.id, true]));
+      setWaveManageModal((current) =>
+        current && current.wave.id === wave.id
+          ? { ...current, leads: { data: leads, loading: false }, selectedLeadIds }
+          : current);
+    } catch (error) {
+      setWaveManageModal((current) =>
+        current && current.wave.id === wave.id
+          ? {
+              ...current,
+              leads: {
+                error: error instanceof Error ? error.message : "Could not load wave leads.",
+                loading: false
+              }
+            }
+          : current);
+    }
+  }
 
   function handleWaveLeadSort(nextKey: typeof waveLeadSortKey) {
     if (waveLeadSortKey === nextKey) {
@@ -15714,6 +15795,158 @@ function CampaignsView({
     }
   }
 
+  async function reloadWaveManageLeads(waveId: number) {
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${waveId}/leads`);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      const leads = (await response.json()) as Lead[];
+      setWaveManageModal((current) =>
+        current && current.wave.id === waveId
+          ? { ...current, leads: { data: leads, loading: false } }
+          : current);
+    } catch (error) {
+      setWaveManageModal((current) =>
+        current && current.wave.id === waveId
+          ? {
+              ...current,
+              leads: {
+                data: current.leads.data,
+                error: error instanceof Error ? error.message : "Could not reload wave leads.",
+                loading: false
+              }
+            }
+          : current);
+    }
+  }
+
+  async function saveManagedWaveDetails(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!waveManageModal) return;
+
+    const { wave, editForm } = waveManageModal;
+    setWaveManageModal((current) => current ? { ...current, savingAction: "edit" } : current);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${wave.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...editForm,
+          waveNumber: Number(editForm.waveNumber)
+        })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setWaveManageModal(null);
+      onDataChanged();
+      setNotice({ kind: "success", message: "Wave details updated." });
+    } catch (error) {
+      setWaveManageModal((current) => current ? { ...current, savingAction: undefined } : current);
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not update wave details."
+      });
+    }
+  }
+
+  async function copyManagedWave() {
+    if (!waveManageModal) return;
+
+    const selectedLeadIds = Object.entries(waveManageModal.selectedLeadIds)
+      .filter(([, selected]) => selected)
+      .map(([leadId]) => Number(leadId));
+
+    setWaveManageModal((current) => current ? { ...current, savingAction: "copy" } : current);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${waveManageModal.wave.id}/copy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...waveManageModal.copyForm,
+          waveNumber: Number(waveManageModal.copyForm.waveNumber),
+          leadIds: selectedLeadIds
+        })
+      });
+      const payload = await response.json().catch(() => null) as { error?: string; copiedLeadCount?: number } | null;
+      if (!response.ok) {
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      setWaveManageModal(null);
+      onDataChanged();
+      setNotice({
+        kind: "success",
+        message: `Wave copied with ${payload?.copiedLeadCount ?? selectedLeadIds.length} lead${(payload?.copiedLeadCount ?? selectedLeadIds.length) === 1 ? "" : "s"}.`
+      });
+    } catch (error) {
+      setWaveManageModal((current) => current ? { ...current, savingAction: undefined } : current);
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not copy wave."
+      });
+    }
+  }
+
+  async function resetManagedWaveLeadStatuses() {
+    if (!waveManageModal) return;
+
+    const selectedLeadIds = Object.entries(waveManageModal.selectedLeadIds)
+      .filter(([, selected]) => selected)
+      .map(([leadId]) => Number(leadId));
+
+    if (!selectedLeadIds.length) {
+      setNotice({ kind: "error", message: "Select at least one lead before resetting statuses." });
+      return;
+    }
+
+    if (!waveManageModal.bulkLeadStatus) {
+      setNotice({ kind: "error", message: "Select the status to apply." });
+      return;
+    }
+
+    setWaveManageModal((current) => current ? { ...current, savingAction: "reset" } : current);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${waveManageModal.wave.id}/leads/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leadStatus: waveManageModal.bulkLeadStatus,
+          leadIds: selectedLeadIds
+        })
+      });
+      const payload = await response.json().catch(() => null) as { error?: string; updated?: number } | null;
+      if (!response.ok) {
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      await reloadWaveManageLeads(waveManageModal.wave.id);
+      if (selectedWaveId === waveManageModal.wave.id) {
+        await loadWaveLeads(waveManageModal.wave.id);
+      }
+      onDataChanged();
+      setWaveManageModal((current) => current ? { ...current, savingAction: undefined } : current);
+      setNotice({ kind: "success", message: `${payload?.updated ?? 0} lead status${(payload?.updated ?? 0) === 1 ? "" : "es"} reset.` });
+    } catch (error) {
+      setWaveManageModal((current) => current ? { ...current, savingAction: undefined } : current);
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not reset lead statuses."
+      });
+    }
+  }
+
   const filteredWaveLeads = waveLeadsState.data
     ?.filter((lead) => {
       if (waveLeadPriorityFilter !== "all" && lead.leadPriority !== waveLeadPriorityFilter) {
@@ -15742,6 +15975,44 @@ function CampaignsView({
       )
     );
   const waveInteractionByLeadId = new Map((waveInteractionState.data ?? []).map((item) => [item.leadId, item]));
+  const managedWaveLeads = waveManageModal?.leads.data
+    ?.filter((lead) => {
+      if (waveManageModal.priorityFilter !== "all" && lead.leadPriority !== waveManageModal.priorityFilter) {
+        return false;
+      }
+
+      if (waveManageModal.statusFilter !== "all" && lead.leadStatus !== waveManageModal.statusFilter) {
+        return false;
+      }
+
+      const responseStatus = lead.responseStatus ?? "";
+      if (waveManageModal.responseStatusFilter === "none" && responseStatus) {
+        return false;
+      }
+
+      if (waveManageModal.responseStatusFilter !== "all" && waveManageModal.responseStatusFilter !== "none" && responseStatus !== waveManageModal.responseStatusFilter) {
+        return false;
+      }
+
+      const query = waveManageModal.searchText.trim().toLowerCase();
+      if (!query) return true;
+
+      return [
+        `Lead ${lead.id}`,
+        lead.customerName,
+        lead.tradingName,
+        lead.contactPhone,
+        lead.contactEmail,
+        lead.postcode,
+        lead.leadStatus,
+        lead.responseStatus
+      ]
+        .filter(Boolean)
+        .some((value) => value!.toLowerCase().includes(query));
+    }) ?? [];
+  const managedSelectedCount = waveManageModal
+    ? Object.values(waveManageModal.selectedLeadIds).filter(Boolean).length
+    : 0;
 
   return (
     <div className="test-page">
@@ -15850,6 +16121,7 @@ function CampaignsView({
                         <th>Status</th>
                         <th>Assigned</th>
                         <th>Telesales</th>
+                        <th>Manage / Copy</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -15879,10 +16151,21 @@ function CampaignsView({
                               <span className="muted">Not sent</span>
                             )}
                           </td>
+                          <td>
+                            <button
+                              className="secondary-action wave-copy-action"
+                              type="button"
+                              onClick={() => void openWaveManageModal(campaign, wave)}
+                              title="Manage or copy wave"
+                            >
+                              <Copy size={15} aria-hidden="true" />
+                              <span>Manage / Copy</span>
+                            </button>
+                          </td>
                           </tr>
                           {selectedWaveId === wave.id && (
                             <tr className="detail-table-row">
-                              <td className="detail-table-cell" colSpan={7}>
+                              <td className="detail-table-cell" colSpan={8}>
                                 {waveLeadsState.loading && <PanelSkeleton compact />}
                                 {waveLeadsState.error && <ErrorPanel error={waveLeadsState.error} />}
                                 {waveLeadsState.data && (
@@ -16170,6 +16453,386 @@ function CampaignsView({
           </section>
         );
       })}
+      {waveManageModal && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel modal-panel-wide wave-manage-modal" aria-modal="true" aria-labelledby="wave-manage-title" role="dialog">
+            <div className="modal-header">
+              <div>
+                <span className="eyebrow">Manage Wave</span>
+                <h3 id="wave-manage-title">{waveManageModal.campaign.name}: {waveManageModal.wave.name}</h3>
+                <p>{managedSelectedCount} of {waveManageModal.leads.data?.length ?? 0} lead{(waveManageModal.leads.data?.length ?? 0) === 1 ? "" : "s"} selected</p>
+              </div>
+              <button className="modal-close" type="button" onClick={() => setWaveManageModal(null)}>
+                Close
+              </button>
+            </div>
+            <div className="modal-body modal-scroll">
+              <form className="wave-manage-section" onSubmit={(event) => void saveManagedWaveDetails(event)}>
+                <div className="wave-manage-section-header">
+                  <div>
+                    <h4>Wave Details</h4>
+                    <p>Modify the existing wave.</p>
+                  </div>
+                  <button className="page-action-button" type="submit" disabled={waveManageModal.savingAction === "edit"}>
+                    {waveManageModal.savingAction === "edit" ? "Saving..." : "Save wave"}
+                  </button>
+                </div>
+                <div className="table-search-group">
+                  <div className="table-search">
+                    <label htmlFor="managed-wave-name">Name</label>
+                    <input
+                      id="managed-wave-name"
+                      type="text"
+                      value={waveManageModal.editForm.name}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, editForm: { ...current.editForm, name: event.target.value } } : current)}
+                    />
+                  </div>
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="managed-wave-number">Wave number</label>
+                    <input
+                      id="managed-wave-number"
+                      type="number"
+                      min="1"
+                      value={waveManageModal.editForm.waveNumber}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, editForm: { ...current.editForm, waveNumber: event.target.value } } : current)}
+                    />
+                  </div>
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="managed-wave-channel">Channel</label>
+                    <select
+                      id="managed-wave-channel"
+                      className="header-select"
+                      value={waveManageModal.editForm.channel}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, editForm: { ...current.editForm, channel: event.target.value } } : current)}
+                    >
+                      <option value="Email">Email</option>
+                      <option value="Leaflet">Leaflet</option>
+                      <option value="Phone">Phone</option>
+                      <option value="Direct visit">Direct visit</option>
+                      <option value="Mixed">Mixed</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="table-search-group">
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="managed-wave-scheduled">Scheduled date</label>
+                    <input
+                      id="managed-wave-scheduled"
+                      type="date"
+                      value={waveManageModal.editForm.scheduledDate}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, editForm: { ...current.editForm, scheduledDate: event.target.value } } : current)}
+                    />
+                  </div>
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="managed-wave-status">Status</label>
+                    <select
+                      id="managed-wave-status"
+                      className="header-select"
+                      value={waveManageModal.editForm.status}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, editForm: { ...current.editForm, status: event.target.value } } : current)}
+                    >
+                      <option value="Planned">Planned</option>
+                      <option value="Ready">Ready</option>
+                      <option value="In progress">In progress</option>
+                      <option value="Completed">Completed</option>
+                    </select>
+                  </div>
+                  <div className="table-search">
+                    <label htmlFor="managed-wave-assigned">Assigned team/user</label>
+                    <input
+                      id="managed-wave-assigned"
+                      type="text"
+                      value={waveManageModal.editForm.assignedTeamOrUser}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, editForm: { ...current.editForm, assignedTeamOrUser: event.target.value } } : current)}
+                    />
+                  </div>
+                </div>
+              </form>
+
+              <section className="wave-manage-section">
+                <div className="wave-manage-section-header">
+                  <div>
+                    <h4>Lead Selection</h4>
+                    <p>Filter and choose which leads are included in copy or status reset actions.</p>
+                  </div>
+                  <div className="table-filter-actions">
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      onClick={() => setWaveManageModal((current) => current ? {
+                        ...current,
+                        selectedLeadIds: {
+                          ...current.selectedLeadIds,
+                          ...Object.fromEntries(managedWaveLeads.map((lead) => [lead.id, true]))
+                        }
+                      } : current)}
+                    >
+                      Select visible
+                    </button>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      onClick={() => setWaveManageModal((current) => current ? {
+                        ...current,
+                        selectedLeadIds: {
+                          ...current.selectedLeadIds,
+                          ...Object.fromEntries(managedWaveLeads.map((lead) => [lead.id, false]))
+                        }
+                      } : current)}
+                    >
+                      Clear visible
+                    </button>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      onClick={() => setWaveManageModal((current) => current ? {
+                        ...current,
+                        selectedLeadIds: Object.fromEntries((current.leads.data ?? []).map((lead) => [lead.id, true]))
+                      } : current)}
+                    >
+                      Select all
+                    </button>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      onClick={() => setWaveManageModal((current) => current ? {
+                        ...current,
+                        selectedLeadIds: Object.fromEntries((current.leads.data ?? []).map((lead) => [lead.id, false]))
+                      } : current)}
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                </div>
+                <div className="table-search-group">
+                  <div className="table-search">
+                    <label htmlFor="managed-wave-lead-search">Search leads</label>
+                    <input
+                      id="managed-wave-lead-search"
+                      type="search"
+                      value={waveManageModal.searchText}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, searchText: event.target.value } : current)}
+                      placeholder="Customer, trading, phone, email, postcode, status"
+                    />
+                  </div>
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="managed-wave-priority-filter">Priority</label>
+                    <select
+                      id="managed-wave-priority-filter"
+                      className="header-select"
+                      value={waveManageModal.priorityFilter}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, priorityFilter: event.target.value } : current)}
+                    >
+                      <option value="all">All priorities</option>
+                      {leadPriorityOrder.map((priority) => (
+                        <option key={priority} value={priority}>{getLeadPriorityLabel(priority)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="managed-wave-status-filter">Status</label>
+                    <select
+                      id="managed-wave-status-filter"
+                      className="header-select"
+                      value={waveManageModal.statusFilter}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, statusFilter: event.target.value } : current)}
+                    >
+                      <option value="all">All statuses</option>
+                      {leadStatuses.map((status) => (
+                        <option key={status.id} value={status.name}>{status.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="managed-wave-response-filter">Response</label>
+                    <select
+                      id="managed-wave-response-filter"
+                      className="header-select"
+                      value={waveManageModal.responseStatusFilter}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, responseStatusFilter: event.target.value } : current)}
+                    >
+                      <option value="all">All responses</option>
+                      <option value="none">No response</option>
+                      {responseStatuses.map((status) => (
+                        <option key={status.id} value={status.name}>{status.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {waveManageModal.leads.loading && <PanelSkeleton compact />}
+                {waveManageModal.leads.error && <ErrorPanel error={waveManageModal.leads.error} />}
+                {waveManageModal.leads.data && (
+                  <div className="wave-manage-leads-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Select</th>
+                          <th>Lead</th>
+                          <th>Customer</th>
+                          <th>Trading</th>
+                          <th>Phone</th>
+                          <th>Email</th>
+                          <th>Postcode</th>
+                          <th>Priority</th>
+                          <th>Status</th>
+                          <th>Response</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {managedWaveLeads.map((lead) => (
+                          <tr key={lead.id} className={waveManageModal.selectedLeadIds[lead.id] ? "selected-row" : ""}>
+                            <td>
+                              <input
+                                aria-label={`Select Lead ${lead.id}`}
+                                type="checkbox"
+                                checked={Boolean(waveManageModal.selectedLeadIds[lead.id])}
+                                onChange={(event) => setWaveManageModal((current) => current ? {
+                                  ...current,
+                                  selectedLeadIds: {
+                                    ...current.selectedLeadIds,
+                                    [lead.id]: event.target.checked
+                                  }
+                                } : current)}
+                              />
+                            </td>
+                            <td><span className="mono">Lead #{lead.id}</span></td>
+                            <td>{lead.customerName}</td>
+                            <td>{lead.tradingName ?? ""}</td>
+                            <td>{lead.contactPhone ?? ""}</td>
+                            <td><CopyableEmail email={lead.contactEmail} /></td>
+                            <td className="mono">{lead.postcode ?? ""}</td>
+                            <td>{getLeadPriorityLabel(lead.leadPriority)}</td>
+                            <td>{lead.leadStatus}</td>
+                            <td>{lead.responseStatus || "None"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {!managedWaveLeads.length && <EmptyPanel message="No leads match the current filters." />}
+                  </div>
+                )}
+              </section>
+
+              <section className="wave-manage-section">
+                <div className="wave-manage-section-header">
+                  <div>
+                    <h4>Bulk Reset Status</h4>
+                    <p>Apply a lead status to the selected leads.</p>
+                  </div>
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    disabled={waveManageModal.savingAction === "reset"}
+                    onClick={() => void resetManagedWaveLeadStatuses()}
+                  >
+                    {waveManageModal.savingAction === "reset" ? "Resetting..." : "Reset selected"}
+                  </button>
+                </div>
+                <div className="table-search table-search-compact">
+                  <label htmlFor="managed-wave-bulk-status">Lead status</label>
+                  <select
+                    id="managed-wave-bulk-status"
+                    className="header-select"
+                    value={waveManageModal.bulkLeadStatus}
+                    onChange={(event) => setWaveManageModal((current) => current ? { ...current, bulkLeadStatus: event.target.value } : current)}
+                  >
+                    {leadStatuses.map((status) => (
+                      <option key={status.id} value={status.name}>{status.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </section>
+
+              <section className="wave-manage-section">
+                <div className="wave-manage-section-header">
+                  <div>
+                    <h4>Copy Wave</h4>
+                    <p>Create a new wave using the selected leads.</p>
+                  </div>
+                  <button
+                    className="page-action-button"
+                    type="button"
+                    disabled={waveManageModal.savingAction === "copy"}
+                    onClick={() => void copyManagedWave()}
+                  >
+                    {waveManageModal.savingAction === "copy" ? "Copying..." : "Copy selected"}
+                  </button>
+                </div>
+                <div className="table-search-group">
+                  <div className="table-search">
+                    <label htmlFor="copy-wave-name">New wave name</label>
+                    <input
+                      id="copy-wave-name"
+                      type="text"
+                      value={waveManageModal.copyForm.name}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, copyForm: { ...current.copyForm, name: event.target.value } } : current)}
+                    />
+                  </div>
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="copy-wave-number">Wave number</label>
+                    <input
+                      id="copy-wave-number"
+                      type="number"
+                      min="1"
+                      value={waveManageModal.copyForm.waveNumber}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, copyForm: { ...current.copyForm, waveNumber: event.target.value } } : current)}
+                    />
+                  </div>
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="copy-wave-status">Status</label>
+                    <select
+                      id="copy-wave-status"
+                      className="header-select"
+                      value={waveManageModal.copyForm.status}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, copyForm: { ...current.copyForm, status: event.target.value } } : current)}
+                    >
+                      <option value="Planned">Planned</option>
+                      <option value="Ready">Ready</option>
+                      <option value="In progress">In progress</option>
+                      <option value="Completed">Completed</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="table-search-group">
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="copy-wave-channel">Channel</label>
+                    <select
+                      id="copy-wave-channel"
+                      className="header-select"
+                      value={waveManageModal.copyForm.channel}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, copyForm: { ...current.copyForm, channel: event.target.value } } : current)}
+                    >
+                      <option value="Email">Email</option>
+                      <option value="Leaflet">Leaflet</option>
+                      <option value="Phone">Phone</option>
+                      <option value="Direct visit">Direct visit</option>
+                      <option value="Mixed">Mixed</option>
+                    </select>
+                  </div>
+                  <div className="table-search table-search-compact">
+                    <label htmlFor="copy-wave-scheduled">Scheduled date</label>
+                    <input
+                      id="copy-wave-scheduled"
+                      type="date"
+                      value={waveManageModal.copyForm.scheduledDate}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, copyForm: { ...current.copyForm, scheduledDate: event.target.value } } : current)}
+                    />
+                  </div>
+                  <div className="table-search">
+                    <label htmlFor="copy-wave-assigned">Assigned team/user</label>
+                    <input
+                      id="copy-wave-assigned"
+                      type="text"
+                      value={waveManageModal.copyForm.assignedTeamOrUser}
+                      onChange={(event) => setWaveManageModal((current) => current ? { ...current, copyForm: { ...current.copyForm, assignedTeamOrUser: event.target.value } } : current)}
+                    />
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      )}
       {telesaleInteractionModal && (
         <div className="modal-backdrop" role="presentation">
           <section className="modal-panel modal-panel-wide" aria-modal="true" aria-labelledby="telesales-interactions-title" role="dialog">
