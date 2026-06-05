@@ -15239,7 +15239,8 @@ function CampaignsView({
       ...waveToForm(wave),
       name: `${wave.name} Copy`,
       waveNumber: String(nextWaveNumber),
-      status: "Planned"
+      status: "Planned",
+      assignedTeamOrUser: ""
     };
   }
 
