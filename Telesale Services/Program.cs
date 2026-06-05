@@ -1018,7 +1018,8 @@ static async Task<IResult> SaveSyncAsync(NpgsqlDataSource db, RedisNotificationS
             user.Id,
             user.FullName,
             $"Telesales changes synced: {context?.WaveName ?? $"Export #{sync.ExportId}"}",
-            $"{user.FullName} synced {leadStateCount} lead state{(leadStateCount == 1 ? "" : "s")}, {interactionCount} interaction{(interactionCount == 1 ? "" : "s")} and {followUpCount} follow-up{(followUpCount == 1 ? "" : "s")}{FormatSyncWaveContext(context)}."));
+            $"{user.FullName} synced {leadStateCount} lead state{(leadStateCount == 1 ? "" : "s")}, {interactionCount} interaction{(interactionCount == 1 ? "" : "s")} and {followUpCount} follow-up{(followUpCount == 1 ? "" : "s")}{FormatSyncWaveContext(context)}.",
+            false));
     }
 
     return Results.Ok(new TelesaleSyncResponse(sync.ExportId, leadStateCount, interactionCount, followUpCount));
@@ -1499,8 +1500,8 @@ internal sealed record TelesaleLeadInteractionSummaryResponse(long LeadId, int I
 internal sealed record TelesaleLeadInteractionDetailResponse(DateTime OccurredAt, string ActivityType, string Title, string? Details, string? TelesaleUser, string? CampaignName = null, string? WaveName = null);
 internal sealed record ActivityEventResponse(long Id, string EventType, string EntityType, long? EntityId, string Title, string Description, long? ActorUserId, string? ActorName, DateTime CreatedAt, bool IsNotifiable)
 {
-    public static ActivityEventResponse ForNotification(string eventType, string entityType, long? entityId, long? actorUserId, string? actorName, string title, string description) =>
-        new(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), eventType, entityType, entityId, title, description, actorUserId, actorName, DateTime.UtcNow, true);
+    public static ActivityEventResponse ForNotification(string eventType, string entityType, long? entityId, long? actorUserId, string? actorName, string title, string description, bool isNotifiable = true) =>
+        new(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), eventType, entityType, entityId, title, description, actorUserId, actorName, DateTime.UtcNow, isNotifiable);
 }
 
 internal sealed class RedisNotificationService(IConfiguration configuration, ILogger<RedisNotificationService> logger)
