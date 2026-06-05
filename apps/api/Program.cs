@@ -2,10 +2,12 @@ using System.Globalization;
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Threading.Channels;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Npgsql;
 using NpgsqlTypes;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 const string JobsQueueName = "matchlab.jobs";
@@ -38,8 +40,10 @@ if (string.IsNullOrWhiteSpace(connectionString))
 
 builder.Services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
 builder.Services.AddHttpClient();
+builder.Services.AddSingleton<RedisNotificationService>();
 
 var app = builder.Build();
+var redisNotifications = app.Services.GetRequiredService<RedisNotificationService>();
 
 app.UseCors("Frontend");
 
@@ -106,6 +110,25 @@ app.MapGet("/api/activity-events", async (NpgsqlDataSource db, int? limit) =>
 {
     var take = Math.Clamp(limit ?? 50, 1, 250);
     return Results.Ok(await LoadActivityEventsAsync(db, take));
+});
+
+app.MapGet("/api/activity-events/stream", async (HttpContext httpContext, RedisNotificationService notifications) =>
+{
+    httpContext.Response.Headers.Append("Cache-Control", "no-cache");
+    httpContext.Response.Headers.Append("X-Accel-Buffering", "no");
+    httpContext.Response.ContentType = "text/event-stream";
+
+    if (!notifications.IsAvailable)
+    {
+        await WriteSseEventAsync(httpContext.Response, "status", new { available = false }, httpContext.RequestAborted);
+        return;
+    }
+
+    await WriteSseEventAsync(httpContext.Response, "status", new { available = true }, httpContext.RequestAborted);
+    await foreach (var activityEvent in notifications.SubscribeActivityEventsAsync(httpContext.RequestAborted))
+    {
+        await WriteSseEventAsync(httpContext.Response, "activity", activityEvent, httpContext.RequestAborted);
+    }
 });
 
 app.MapGet("/api/diary-entry-types", async (NpgsqlDataSource db) =>
@@ -3325,7 +3348,8 @@ app.MapPost("/api/campaign-waves/{waveId:long}/leads/{leadId:long}/telesales-ins
         reader.GetDateTime(6),
         null,
         null,
-        null);
+        null,
+        []);
 
     await LogActivityEventAsync(db, new ActivityEventCreateRequest(
         "lead.telesales_instruction.added",
@@ -3338,6 +3362,16 @@ app.MapPost("/api/campaign-waves/{waveId:long}/leads/{leadId:long}/telesales-ins
         true));
 
     return Results.Ok(response);
+});
+
+app.MapGet("/api/campaign-waves/{waveId:long}/leads/{leadId:long}/telesales-instructions", async (NpgsqlDataSource db, long waveId, long leadId) =>
+{
+    if (!await CampaignWaveLeadExistsAsync(db, waveId, leadId))
+    {
+        return Results.NotFound(new { error = "Lead was not found in this wave." });
+    }
+
+    return Results.Ok(await LoadTelesaleLeadInstructionsAsync(db, waveId, leadId));
 });
 
 app.MapPost("/api/gdpr", async (NpgsqlDataSource db, GdprCreateRequest request) =>
@@ -6127,6 +6161,14 @@ static async Task<IReadOnlyList<ActivityEventResponse>> LoadActivityEventsAsync(
     return rows;
 }
 
+static async Task WriteSseEventAsync(HttpResponse response, string eventName, object payload, CancellationToken cancellationToken)
+{
+    var json = JsonSerializer.Serialize(payload, JsonSerializerOptions.Web);
+    await response.WriteAsync($"event: {eventName}\n", cancellationToken);
+    await response.WriteAsync($"data: {json}\n\n", cancellationToken);
+    await response.Body.FlushAsync(cancellationToken);
+}
+
 static async Task<DatabaseBackupResult> CreateDatabaseBackupAsync(string databaseConnectionString, string mode)
 {
     var settings = ParsePostgresConnectionString(databaseConnectionString);
@@ -7441,7 +7483,7 @@ static async Task<ActivityActorContext> ResolveActivityActorAsync(NpgsqlDataSour
     return new ActivityActorContext(actorUserId, actorName);
 }
 
-static async Task LogActivityEventAsync(NpgsqlDataSource db, ActivityEventCreateRequest activityEvent)
+async Task LogActivityEventAsync(NpgsqlDataSource db, ActivityEventCreateRequest activityEvent)
 {
     await using var command = db.CreateCommand("""
         insert into paymentsense_core.activity_events (
@@ -7466,6 +7508,7 @@ static async Task LogActivityEventAsync(NpgsqlDataSource db, ActivityEventCreate
           @is_notifiable,
           @metadata_json::jsonb
         )
+        returning id, created_at
         """);
     command.Parameters.AddWithValue("event_type", activityEvent.EventType);
     command.Parameters.AddWithValue("entity_type", activityEvent.EntityType);
@@ -7476,7 +7519,20 @@ static async Task LogActivityEventAsync(NpgsqlDataSource db, ActivityEventCreate
     command.Parameters.AddWithValue("description", activityEvent.Description);
     command.Parameters.AddWithValue("is_notifiable", activityEvent.IsNotifiable);
     command.Parameters.AddWithValue("metadata_json", JsonSerializer.Serialize(activityEvent.Metadata ?? new Dictionary<string, object?>(), JsonDefaults.Options));
-    await command.ExecuteNonQueryAsync();
+    await using var reader = await command.ExecuteReaderAsync();
+    await reader.ReadAsync();
+
+    await redisNotifications.PublishActivityEventAsync(new ActivityEventResponse(
+        reader.GetInt64(0),
+        activityEvent.EventType,
+        activityEvent.EntityType,
+        activityEvent.EntityId,
+        activityEvent.Title,
+        activityEvent.Description,
+        activityEvent.ActorUserId,
+        activityEvent.ActorName,
+        reader.GetDateTime(1),
+        activityEvent.IsNotifiable));
 }
 
 static async Task<IReadOnlyList<DiaryEntryTypeResponse>> LoadDiaryEntryTypesAsync(NpgsqlDataSource db)
@@ -11030,7 +11086,7 @@ static async Task<IReadOnlyList<LeadResponse>> LoadLeadsAsync(NpgsqlDataSource d
             reader.GetNullableString(23),
             reader.GetInt64(24),
             reader.GetInt64(25),
-            Array.Empty<LeadProspectResponse>()));
+            Prospects: Array.Empty<LeadProspectResponse>()));
     }
 
     if (rows.Count == 0)
@@ -11093,7 +11149,12 @@ static async Task<IReadOnlyList<LeadResponse>> LoadCampaignWaveLeadsAsync(Npgsql
             select count(*)
             from paymentsense_core.lead_contact_history h
             where h.lead_id = l.id
-          ) as contact_history_count
+          ) as contact_history_count,
+          coalesce(tis.instruction_count, 0) as telesale_instruction_count,
+          coalesce(tis.unacknowledged_instruction_count, 0) as telesale_unacknowledged_instruction_count,
+          coalesce(tis.reply_count, 0) as telesale_instruction_reply_count,
+          tis.latest_instruction_at,
+          tis.latest_reply_at
         from paymentsense_core.campaign_wave_leads cwl
         join paymentsense_core.leads l on l.id = cwl.lead_id
         left join paymentsense_core.users u on u.id = l.assigned_user_id
@@ -11143,6 +11204,18 @@ static async Task<IReadOnlyList<LeadResponse>> LoadCampaignWaveLeadsAsync(Npgsql
           order by lp.is_primary desc, p.prospect_id
           limit 1
         ) pp on true
+        left join lateral (
+          select
+            count(*)::bigint as instruction_count,
+            count(*) filter (where i.acknowledged_at is null)::bigint as unacknowledged_instruction_count,
+            coalesce(count(r.id), 0)::bigint as reply_count,
+            max(i.created_at) as latest_instruction_at,
+            max(r.created_at) as latest_reply_at
+          from paymentsense_core.telesale_lead_instructions i
+          left join paymentsense_core.telesale_lead_instruction_replies r on r.instruction_id = i.id
+          where i.campaign_wave_id = cwl.campaign_wave_id
+            and i.lead_id = l.id
+        ) tis on true
         where cwl.campaign_wave_id = @wave_id
         order by l.created_at desc, l.id desc
         """;
@@ -11181,7 +11254,13 @@ static async Task<IReadOnlyList<LeadResponse>> LoadCampaignWaveLeadsAsync(Npgsql
             reader.GetNullableString(23),
             reader.GetInt64(24),
             reader.GetInt64(25),
-            Array.Empty<LeadProspectResponse>()));
+            new TelesaleInstructionSummaryResponse(
+                reader.GetInt64(26),
+                reader.GetInt64(27),
+                reader.GetInt64(28),
+                reader.IsDBNull(29) ? null : reader.GetDateTime(29),
+                reader.IsDBNull(30) ? null : reader.GetDateTime(30)),
+            Prospects: Array.Empty<LeadProspectResponse>()));
     }
 
     if (rows.Count == 0)
@@ -12339,7 +12418,7 @@ static async Task<LeadDetailResponse?> LoadLeadDetailAsync(NpgsqlDataSource db, 
         reader.GetNullableString(23),
         0,
         0,
-        Array.Empty<LeadProspectResponse>());
+        Prospects: Array.Empty<LeadProspectResponse>());
     var commercials = lead.CustomerId.HasValue
         ? await LoadCustomerCommercialsAsync(db, lead.CustomerId.Value)
         : await LoadLeadCommercialsAsync(db, leadId);
@@ -12513,6 +12592,106 @@ static async Task<bool> CampaignWaveLeadExistsAsync(NpgsqlDataSource db, long wa
     command.Parameters.AddWithValue("wave_id", waveId);
     command.Parameters.AddWithValue("lead_id", leadId);
     return (bool?)await command.ExecuteScalarAsync() ?? false;
+}
+
+static async Task<IReadOnlyList<TelesaleLeadInstructionResponse>> LoadTelesaleLeadInstructionsAsync(NpgsqlDataSource db, long waveId, long leadId)
+{
+    await using var command = db.CreateCommand("""
+        select
+          i.id,
+          i.campaign_wave_id,
+          i.lead_id,
+          i.instruction_text,
+          i.priority,
+          i.created_by_user_id,
+          created_by.full_name,
+          i.created_at,
+          i.acknowledged_at,
+          i.acknowledged_by_user_id,
+          acknowledged_by.full_name
+        from paymentsense_core.telesale_lead_instructions i
+        left join paymentsense_core.users created_by on created_by.id = i.created_by_user_id
+        left join paymentsense_core.users acknowledged_by on acknowledged_by.id = i.acknowledged_by_user_id
+        where i.campaign_wave_id = @wave_id
+          and i.lead_id = @lead_id
+        order by i.created_at desc, i.id desc
+        """);
+    command.Parameters.AddWithValue("wave_id", waveId);
+    command.Parameters.AddWithValue("lead_id", leadId);
+
+    var instructions = new List<TelesaleLeadInstructionResponse>();
+    await using var reader = await command.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+    {
+        instructions.Add(new TelesaleLeadInstructionResponse(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.IsDBNull(5) ? null : reader.GetInt64(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            reader.GetDateTime(7),
+            reader.IsDBNull(8) ? null : reader.GetDateTime(8),
+            reader.IsDBNull(9) ? null : reader.GetInt64(9),
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            []));
+    }
+
+    return await AttachTelesaleInstructionRepliesAsync(db, instructions);
+}
+
+static async Task<IReadOnlyList<TelesaleLeadInstructionResponse>> AttachTelesaleInstructionRepliesAsync(NpgsqlDataSource db, IReadOnlyList<TelesaleLeadInstructionResponse> instructions)
+{
+    if (instructions.Count == 0)
+    {
+        return instructions;
+    }
+
+    var instructionIds = instructions.Select(instruction => instruction.Id).ToArray();
+    var repliesByInstructionId = new Dictionary<long, List<TelesaleLeadInstructionReplyResponse>>();
+    await using var command = db.CreateCommand("""
+        select
+          r.id,
+          r.instruction_id,
+          r.reply_text,
+          r.created_by_user_id,
+          created_by.full_name,
+          r.created_at
+        from paymentsense_core.telesale_lead_instruction_replies r
+        left join paymentsense_core.users created_by on created_by.id = r.created_by_user_id
+        where r.instruction_id = any(@instruction_ids)
+        order by r.instruction_id, r.created_at, r.id
+        """);
+    command.Parameters.AddWithValue("instruction_ids", instructionIds);
+
+    await using var reader = await command.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+    {
+        var instructionId = reader.GetInt64(1);
+        if (!repliesByInstructionId.TryGetValue(instructionId, out var replies))
+        {
+            replies = [];
+            repliesByInstructionId[instructionId] = replies;
+        }
+
+        replies.Add(new TelesaleLeadInstructionReplyResponse(
+            reader.GetInt64(0),
+            instructionId,
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetInt64(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetDateTime(5)));
+    }
+
+    return instructions
+        .Select(instruction => instruction with
+        {
+            Replies = repliesByInstructionId.TryGetValue(instruction.Id, out var replies)
+                ? replies
+                : []
+        })
+        .ToList();
 }
 
 static ProspectDetailResponse MapLiveProspectDetailToResponse(LiveProspectDetail detail, bool extractedNow)
@@ -13675,6 +13854,98 @@ internal sealed record DatabaseBackupResult(bool Success, string? FileName, stri
     public static DatabaseBackupResult Created(string fileName, string filePath) => new(true, fileName, filePath, null);
     public static DatabaseBackupResult Failed(string errorMessage) => new(false, null, null, errorMessage);
 }
+
+internal sealed class RedisNotificationService(IConfiguration configuration, ILogger<RedisNotificationService> logger)
+{
+    private const string ActivityEventsChannel = "matchlab:activity-events";
+    private readonly Lazy<Task<IConnectionMultiplexer?>> _connection = new(() => ConnectAsync(configuration, logger));
+
+    public bool IsAvailable => !string.IsNullOrWhiteSpace(GetConnectionString(configuration));
+
+    public async Task PublishActivityEventAsync(ActivityEventResponse activityEvent)
+    {
+        var connection = await GetConnectionAsync();
+        if (connection is null) return;
+
+        try
+        {
+            var payload = JsonSerializer.Serialize(activityEvent, JsonSerializerOptions.Web);
+            await connection.GetSubscriber().PublishAsync(RedisChannel.Literal(ActivityEventsChannel), payload);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Could not publish Redis activity event {EventType}.", activityEvent.EventType);
+        }
+    }
+
+    public async IAsyncEnumerable<ActivityEventResponse> SubscribeActivityEventsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var connection = await GetConnectionAsync();
+        if (connection is null) yield break;
+
+        var channel = Channel.CreateUnbounded<ActivityEventResponse>();
+        var subscriber = connection.GetSubscriber();
+        Action<RedisChannel, RedisValue> handler = (_, value) =>
+        {
+            try
+            {
+                var activityEvent = JsonSerializer.Deserialize<ActivityEventResponse>(value.ToString(), JsonSerializerOptions.Web);
+                if (activityEvent is not null)
+                {
+                    channel.Writer.TryWrite(activityEvent);
+                }
+            }
+            catch (JsonException exception)
+            {
+                logger.LogWarning(exception, "Could not parse Redis activity event payload.");
+            }
+        };
+
+        await subscriber.SubscribeAsync(RedisChannel.Literal(ActivityEventsChannel), handler);
+        try
+        {
+            await foreach (var activityEvent in channel.Reader.ReadAllAsync(cancellationToken))
+            {
+                yield return activityEvent;
+            }
+        }
+        finally
+        {
+            await subscriber.UnsubscribeAsync(RedisChannel.Literal(ActivityEventsChannel), handler);
+            channel.Writer.TryComplete();
+        }
+    }
+
+    private async Task<IConnectionMultiplexer?> GetConnectionAsync()
+    {
+        if (!IsAvailable) return null;
+        return await _connection.Value;
+    }
+
+    private static async Task<IConnectionMultiplexer?> ConnectAsync(IConfiguration configuration, ILogger logger)
+    {
+        var connectionString = GetConnectionString(configuration);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            logger.LogInformation("Redis notifications are disabled because Redis__ConnectionString is not set.");
+            return null;
+        }
+
+        try
+        {
+            return await ConnectionMultiplexer.ConnectAsync(connectionString);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Redis notifications are disabled because Redis could not be reached.");
+            return null;
+        }
+    }
+
+    private static string? GetConnectionString(IConfiguration configuration) =>
+        configuration["Redis:ConnectionString"] ?? Environment.GetEnvironmentVariable("REDIS_CONNECTION_STRING");
+}
+
 internal sealed record AiCompanyInsightResponse(long Id, string SearchName, string? SearchLocation, string CompanyName, string CompanyNumber, string? Status, JsonElement Insight, long? CreatedByUserId, string? CreatedByUserName, DateTime CreatedAt, DateTime UpdatedAt);
 internal sealed record QueueMetricsResponse(string QueueName, bool Available, int ReadyCount, int UnackedCount, int ConsumerCount, string? Error);
 internal sealed record QueuedJobSummaryResponse(long Total, long Pending, long Queued, long Running, long Completed, long Failed, long CancelRequested, long Cancelled);
@@ -13791,7 +14062,7 @@ internal sealed record GeneratedCustomerMatch(long ProspectDbId, string Prospect
 internal sealed record MatchEvaluation(bool Include, decimal Score, string Status, IReadOnlyList<string> Reasons);
 internal sealed record LeadSummaryResponse(long Id, long? CustomerId, string LeadStatus, DateTime CreatedAt);
 internal sealed record LeadCampaignMembershipResponse(long LeadId, long CampaignId, string CampaignName, long WaveId, string WaveName, int WaveNumber);
-internal sealed record LeadResponse(long Id, long? CustomerId, string LeadStatus, string LeadPriority, long? AssignedUserId, string? AssignedUserName, DateTime CreatedAt, string? CustomerRef, string? Mid, string CustomerName, string? TradingName, string? TradingAddress, string? Postcode, long? RegionId, string? RegionName, long? CustomerActivityStatusId, string? CustomerActivityStatusName, long? CustomerValueTypeId, string? CustomerValueTypeLabel, string? ContactPhone, string? ContactEmail, string SourceType, bool CreatedFromQuote, string? SourceQuoteId, long ProspectCount, long ContactHistoryCount, IReadOnlyList<LeadProspectResponse> Prospects)
+internal sealed record LeadResponse(long Id, long? CustomerId, string LeadStatus, string LeadPriority, long? AssignedUserId, string? AssignedUserName, DateTime CreatedAt, string? CustomerRef, string? Mid, string CustomerName, string? TradingName, string? TradingAddress, string? Postcode, long? RegionId, string? RegionName, long? CustomerActivityStatusId, string? CustomerActivityStatusName, long? CustomerValueTypeId, string? CustomerValueTypeLabel, string? ContactPhone, string? ContactEmail, string SourceType, bool CreatedFromQuote, string? SourceQuoteId, long ProspectCount, long ContactHistoryCount, TelesaleInstructionSummaryResponse? TelesaleInstructionSummary = null, IReadOnlyList<LeadProspectResponse>? Prospects = null)
 {
     public string? ResponseStatus { get; init; }
 }
@@ -13865,7 +14136,9 @@ internal sealed record CampaignWaveLeadResponseStatusUpdateRequest(string? Respo
 internal sealed record CampaignWaveTelesaleSendRequest(IReadOnlyList<long>? UserIds);
 internal sealed record CampaignWaveTelesaleExportPayload(string Json, int LeadCount);
 internal sealed record TelesaleLeadInstructionCreateRequest(string? InstructionText, string? Priority);
-internal sealed record TelesaleLeadInstructionResponse(long Id, long CampaignWaveId, long LeadId, string InstructionText, string Priority, long? CreatedByUserId, string? CreatedByUserName, DateTime CreatedAt, DateTime? AcknowledgedAt, long? AcknowledgedByUserId, string? AcknowledgedByUserName);
+internal sealed record TelesaleLeadInstructionResponse(long Id, long CampaignWaveId, long LeadId, string InstructionText, string Priority, long? CreatedByUserId, string? CreatedByUserName, DateTime CreatedAt, DateTime? AcknowledgedAt, long? AcknowledgedByUserId, string? AcknowledgedByUserName, IReadOnlyList<TelesaleLeadInstructionReplyResponse> Replies);
+internal sealed record TelesaleLeadInstructionReplyResponse(long Id, long InstructionId, string ReplyText, long? CreatedByUserId, string? CreatedByUserName, DateTime CreatedAt);
+internal sealed record TelesaleInstructionSummaryResponse(long InstructionCount, long UnacknowledgedInstructionCount, long ReplyCount, DateTime? LatestInstructionAt, DateTime? LatestReplyAt);
 internal sealed record TelesaleLeadInteractionSummaryResponse(long LeadId, int InteractionCount, DateTime LastInteractionAt, string? TelesaleUsers);
 internal sealed record TelesaleLeadInteractionDetailResponse(DateTime OccurredAt, string ActivityType, string Title, string? Details, string? TelesaleUser, string? CampaignName = null, string? WaveName = null);
 internal enum ArchiveStatus { Success, NotFound, Blocked, Failed }

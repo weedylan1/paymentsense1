@@ -14,6 +14,7 @@ services:
       RabbitMq__VHost: /
       RabbitMq__ManagementBaseUrl: http://host.docker.internal:15672
       TelesaleServices__BaseUrl: http://host.docker.internal:5185
+      Redis__ConnectionString: host.docker.internal:6379,password=SuperSecret123!
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

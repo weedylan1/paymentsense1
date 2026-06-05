@@ -2,7 +2,9 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Npgsql;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -23,6 +25,7 @@ if (string.IsNullOrWhiteSpace(tokenSecret))
 
 builder.Services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
 builder.Services.AddSingleton(new TokenService(tokenSecret));
+builder.Services.AddSingleton<RedisNotificationService>();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("TelesaleClients", policy => policy
@@ -65,6 +68,33 @@ app.MapGet("/api/me", async (NpgsqlDataSource db, HttpRequest request, TokenServ
 {
     var auth = await AuthenticateAsync(db, request, tokens);
     return auth.ErrorResult ?? Results.Ok(auth.User);
+});
+
+app.MapGet("/api/events/stream", async (HttpContext httpContext, NpgsqlDataSource db, TokenService tokens, RedisNotificationService notifications) =>
+{
+    var token = httpContext.Request.Query["token"].ToString();
+    var userId = tokens.Validate(token);
+    if (userId is null || await LoadTelesaleUserByIdAsync(db, userId.Value) is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    httpContext.Response.Headers.Append("Cache-Control", "no-cache");
+    httpContext.Response.Headers.Append("X-Accel-Buffering", "no");
+    httpContext.Response.ContentType = "text/event-stream";
+
+    await WriteSseEventAsync(httpContext.Response, "status", new { available = notifications.IsAvailable }, httpContext.RequestAborted);
+    if (!notifications.IsAvailable)
+    {
+        return Results.Empty;
+    }
+
+    await foreach (var activityEvent in notifications.SubscribeActivityEventsAsync(httpContext.RequestAborted))
+    {
+        await WriteSseEventAsync(httpContext.Response, "activity", activityEvent, httpContext.RequestAborted);
+    }
+
+    return Results.Empty;
 });
 
 app.MapGet("/api/waves", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens) =>
@@ -139,7 +169,7 @@ app.MapGet("/api/waves/{exportId:long}/main-context-summary", async (NpgsqlDataS
     return Results.Ok(await LoadMainAppLeadContextSummaryAsync(db, exportId));
 });
 
-app.MapPost("/api/waves/{exportId:long}/instructions/{instructionId:long}/acknowledge", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens, long exportId, long instructionId) =>
+app.MapPost("/api/waves/{exportId:long}/instructions/{instructionId:long}/acknowledge", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens, RedisNotificationService notifications, long exportId, long instructionId) =>
 {
     var auth = await AuthenticateAsync(db, request, tokens);
     if (auth.ErrorResult is not null)
@@ -153,9 +183,60 @@ app.MapPost("/api/waves/{exportId:long}/instructions/{instructionId:long}/acknow
     }
 
     var acknowledged = await AcknowledgeInstructionAsync(db, auth.User!.Id, exportId, instructionId);
+    if (acknowledged is not null)
+    {
+        var context = await LoadInstructionNotificationContextAsync(db, exportId, instructionId);
+        await notifications.PublishActivityEventAsync(ActivityEventResponse.ForNotification(
+            "lead.telesales_instruction.acknowledged",
+            "lead",
+            context?.LeadId,
+            auth.User.Id,
+            auth.User.FullName,
+            $"Instruction acknowledged: {context?.LeadLabel ?? $"Lead #{context?.LeadId ?? 0}"}",
+            $"{auth.User.FullName} acknowledged \"{ShortenText(context?.InstructionText ?? acknowledged.InstructionText, 90)}\"{FormatWaveContext(context)}."));
+    }
+
     return acknowledged is null
         ? Results.NotFound(new { error = "Instruction was not found for this wave." })
         : Results.Ok(acknowledged);
+});
+
+app.MapPost("/api/waves/{exportId:long}/instructions/{instructionId:long}/replies", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens, RedisNotificationService notifications, long exportId, long instructionId, TelesaleInstructionReplyCreateRequest reply) =>
+{
+    var auth = await AuthenticateAsync(db, request, tokens);
+    if (auth.ErrorResult is not null)
+    {
+        return auth.ErrorResult;
+    }
+
+    var replyText = NullIfBlank(reply.ReplyText);
+    if (replyText is null)
+    {
+        return Results.BadRequest(new { error = "Reply text is required." });
+    }
+
+    if (!await IsExportAssignedToUserAsync(db, auth.User!.Id, exportId))
+    {
+        return Results.NotFound(new { error = "Wave export was not found for this user." });
+    }
+
+    var created = await CreateInstructionReplyAsync(db, auth.User.Id, exportId, instructionId, replyText);
+    if (created is not null)
+    {
+        var context = await LoadInstructionNotificationContextAsync(db, exportId, instructionId);
+        await notifications.PublishActivityEventAsync(ActivityEventResponse.ForNotification(
+            "lead.telesales_instruction.replied",
+            "lead",
+            context?.LeadId,
+            auth.User.Id,
+            auth.User.FullName,
+            $"Telesales replied: {context?.LeadLabel ?? $"Lead #{context?.LeadId ?? 0}"}",
+            $"{auth.User.FullName}: \"{ShortenText(replyText, 120)}\"{FormatWaveContext(context)}."));
+    }
+
+    return created is null
+        ? Results.NotFound(new { error = "Instruction was not found for this wave." })
+        : Results.Ok(created);
 });
 
 app.MapPost("/api/sync", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens, TelesaleSyncRequest sync) =>
@@ -445,10 +526,12 @@ static async Task<TelesaleMainLeadContextResponse> LoadMainAppLeadContextAsync(N
                 reader.IsDBNull(5) ? null : reader.GetString(5),
                 reader.IsDBNull(6) ? null : reader.GetDateTime(6),
                 reader.IsDBNull(7) ? null : reader.GetInt64(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8)));
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                []));
         }
     }
 
+    instructions = await AttachInstructionRepliesAsync(db, instructions);
     return new TelesaleMainLeadContextResponse(history, instructions);
 }
 
@@ -563,7 +646,7 @@ static async Task<TelesaleMainInstructionResponse?> AcknowledgeInstructionAsync(
     command.Parameters.AddWithValue("user_id", userId);
 
     await using var reader = await command.ExecuteReaderAsync();
-    return await reader.ReadAsync()
+    var instruction = await reader.ReadAsync()
         ? new TelesaleMainInstructionResponse(
             reader.GetInt64(0),
             reader.GetString(1),
@@ -573,8 +656,174 @@ static async Task<TelesaleMainInstructionResponse?> AcknowledgeInstructionAsync(
             reader.IsDBNull(5) ? null : reader.GetString(5),
             reader.IsDBNull(6) ? null : reader.GetDateTime(6),
             reader.IsDBNull(7) ? null : reader.GetInt64(7),
-            reader.IsDBNull(8) ? null : reader.GetString(8))
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            [])
         : null;
+
+    return instruction is null
+        ? null
+        : (await AttachInstructionRepliesAsync(db, [instruction])).Single();
+}
+
+static async Task<TelesaleMainInstructionReplyResponse?> CreateInstructionReplyAsync(NpgsqlDataSource db, long userId, long exportId, long instructionId, string replyText)
+{
+    await using var command = db.CreateCommand("""
+        with export_context as (
+          select campaign_wave_id
+          from paymentsense_core.telesale_wave_exports
+          where id = @export_id
+        ),
+        target_instruction as (
+          select i.id
+          from paymentsense_core.telesale_lead_instructions i
+          join export_context ec on ec.campaign_wave_id = i.campaign_wave_id
+          where i.id = @instruction_id
+        ),
+        inserted as (
+          insert into paymentsense_core.telesale_lead_instruction_replies (
+            instruction_id,
+            reply_text,
+            created_by_user_id
+          )
+          select
+            ti.id,
+            @reply_text,
+            @user_id
+          from target_instruction ti
+          returning id, instruction_id, reply_text, created_by_user_id, created_at
+        )
+        select
+          inserted.id,
+          inserted.instruction_id,
+          inserted.reply_text,
+          inserted.created_by_user_id,
+          created_by.full_name,
+          inserted.created_at
+        from inserted
+        left join paymentsense_core.users created_by on created_by.id = inserted.created_by_user_id
+        """);
+    command.Parameters.AddWithValue("export_id", exportId);
+    command.Parameters.AddWithValue("instruction_id", instructionId);
+    command.Parameters.AddWithValue("reply_text", replyText);
+    command.Parameters.AddWithValue("user_id", userId);
+
+    await using var reader = await command.ExecuteReaderAsync();
+    return await reader.ReadAsync()
+        ? new TelesaleMainInstructionReplyResponse(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetInt64(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetDateTime(5))
+        : null;
+}
+
+static async Task<TelesaleInstructionNotificationContext?> LoadInstructionNotificationContextAsync(NpgsqlDataSource db, long exportId, long instructionId)
+{
+    await using var command = db.CreateCommand("""
+        select
+          i.lead_id,
+          i.instruction_text,
+          cw.name as wave_name,
+          c.name as campaign_name,
+          coalesce(cust_org.display_name, quote.business_name, quote_detail.business_name, prospect_org.display_name, 'Lead #' || i.lead_id::text) as lead_label
+        from paymentsense_core.telesale_lead_instructions i
+        join paymentsense_core.telesale_wave_exports twe on twe.campaign_wave_id = i.campaign_wave_id
+        join paymentsense_core.campaign_waves cw on cw.id = i.campaign_wave_id
+        join paymentsense_core.campaigns c on c.id = cw.campaign_id
+        join paymentsense_core.leads l on l.id = i.lead_id
+        left join paymentsense_core.customers cust on cust.id = l.customer_id
+        left join paymentsense_core.organisations cust_org on cust_org.id = cust.organisation_id
+        left join paymentsense_core.sales_quotes quote on quote.quote_id = l.source_quote_id
+        left join paymentsense_core.sales_quote_prospect_details quote_detail on quote_detail.prospect_id = quote.prospect_id
+        left join lateral (
+          select po.display_name
+          from paymentsense_core.lead_prospects lp
+          join paymentsense_core.prospects p on p.id = lp.prospect_id
+          join paymentsense_core.organisations po on po.id = p.organisation_id
+          where lp.lead_id = l.id
+          order by lp.is_primary desc, p.prospect_id
+          limit 1
+        ) prospect_org on true
+        where twe.id = @export_id
+          and i.id = @instruction_id
+        limit 1
+        """);
+    command.Parameters.AddWithValue("export_id", exportId);
+    command.Parameters.AddWithValue("instruction_id", instructionId);
+
+    await using var reader = await command.ExecuteReaderAsync();
+    return await reader.ReadAsync()
+        ? new TelesaleInstructionNotificationContext(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4))
+        : null;
+}
+
+static string ShortenText(string text, int maxLength)
+{
+    var trimmed = text.Trim();
+    return trimmed.Length <= maxLength ? trimmed : $"{trimmed[..Math.Max(0, maxLength - 3)]}...";
+}
+
+static string FormatWaveContext(TelesaleInstructionNotificationContext? context) =>
+    context is null ? "" : $" on {context.CampaignName} / {context.WaveName}.";
+
+static async Task<List<TelesaleMainInstructionResponse>> AttachInstructionRepliesAsync(NpgsqlDataSource db, List<TelesaleMainInstructionResponse> instructions)
+{
+    if (instructions.Count == 0)
+    {
+        return instructions;
+    }
+
+    var instructionIds = instructions.Select(instruction => instruction.Id).ToArray();
+    var repliesByInstructionId = new Dictionary<long, List<TelesaleMainInstructionReplyResponse>>();
+    await using var command = db.CreateCommand("""
+        select
+          r.id,
+          r.instruction_id,
+          r.reply_text,
+          r.created_by_user_id,
+          created_by.full_name,
+          r.created_at
+        from paymentsense_core.telesale_lead_instruction_replies r
+        left join paymentsense_core.users created_by on created_by.id = r.created_by_user_id
+        where r.instruction_id = any(@instruction_ids)
+        order by r.instruction_id, r.created_at, r.id
+        """);
+    command.Parameters.AddWithValue("instruction_ids", instructionIds);
+
+    await using var reader = await command.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+    {
+        var instructionId = reader.GetInt64(1);
+        if (!repliesByInstructionId.TryGetValue(instructionId, out var replies))
+        {
+            replies = [];
+            repliesByInstructionId[instructionId] = replies;
+        }
+
+        replies.Add(new TelesaleMainInstructionReplyResponse(
+            reader.GetInt64(0),
+            instructionId,
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetInt64(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetDateTime(5)));
+    }
+
+    return instructions
+        .Select(instruction => instruction with
+        {
+            Replies = repliesByInstructionId.TryGetValue(instruction.Id, out var replies)
+                ? replies
+                : []
+        })
+        .ToList();
 }
 
 static async Task<IResult> SaveSyncAsync(NpgsqlDataSource db, long userId, TelesaleSyncRequest sync)
@@ -1092,6 +1341,14 @@ static string? NullIfBlank(string? value)
     return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
 }
 
+static async Task WriteSseEventAsync(HttpResponse response, string eventName, object payload, CancellationToken cancellationToken)
+{
+    var json = JsonSerializer.Serialize(payload, JsonSerializerOptions.Web);
+    await response.WriteAsync($"event: {eventName}\n", cancellationToken);
+    await response.WriteAsync($"data: {json}\n\n", cancellationToken);
+    await response.Body.FlushAsync(cancellationToken);
+}
+
 static string? FormatJsonValue(JsonElement? value)
 {
     if (value is null || value.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
@@ -1194,9 +1451,108 @@ internal sealed record TelesaleSyncResponse(long ExportId, int LeadStateCount, i
 internal sealed record TelesaleMainLeadContextResponse(IReadOnlyList<TelesaleMainContactHistoryResponse> ContactHistory, IReadOnlyList<TelesaleMainInstructionResponse> Instructions);
 internal sealed record TelesaleMainLeadContextSummaryResponse(long LeadId, int ContactHistoryCount, DateTime? LatestContactHistoryAt, int InstructionCount, int UnacknowledgedInstructionCount, DateTime? LatestInstructionAt);
 internal sealed record TelesaleMainContactHistoryResponse(long Id, string Channel, DateTime ContactedAt, string? Outcome, string? Notes, string? Reason, string? WhoBy, string? ResponseStatus);
-internal sealed record TelesaleMainInstructionResponse(long Id, string InstructionText, string Priority, DateTime CreatedAt, long? CreatedByUserId, string? CreatedByUserName, DateTime? AcknowledgedAt, long? AcknowledgedByUserId, string? AcknowledgedByUserName);
+internal sealed record TelesaleMainInstructionResponse(long Id, string InstructionText, string Priority, DateTime CreatedAt, long? CreatedByUserId, string? CreatedByUserName, DateTime? AcknowledgedAt, long? AcknowledgedByUserId, string? AcknowledgedByUserName, IReadOnlyList<TelesaleMainInstructionReplyResponse> Replies);
+internal sealed record TelesaleMainInstructionReplyResponse(long Id, long InstructionId, string ReplyText, long? CreatedByUserId, string? CreatedByUserName, DateTime CreatedAt);
+internal sealed record TelesaleInstructionReplyCreateRequest(string? ReplyText);
+internal sealed record TelesaleInstructionNotificationContext(long LeadId, string InstructionText, string WaveName, string CampaignName, string LeadLabel);
 internal sealed record TelesaleLeadInteractionSummaryResponse(long LeadId, int InteractionCount, DateTime LastInteractionAt, string? TelesaleUsers);
 internal sealed record TelesaleLeadInteractionDetailResponse(DateTime OccurredAt, string ActivityType, string Title, string? Details, string? TelesaleUser, string? CampaignName = null, string? WaveName = null);
+internal sealed record ActivityEventResponse(long Id, string EventType, string EntityType, long? EntityId, string Title, string Description, long? ActorUserId, string? ActorName, DateTime CreatedAt, bool IsNotifiable)
+{
+    public static ActivityEventResponse ForNotification(string eventType, string entityType, long? entityId, long? actorUserId, string? actorName, string title, string description) =>
+        new(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), eventType, entityType, entityId, title, description, actorUserId, actorName, DateTime.UtcNow, true);
+}
+
+internal sealed class RedisNotificationService(IConfiguration configuration, ILogger<RedisNotificationService> logger)
+{
+    private const string ActivityEventsChannel = "matchlab:activity-events";
+    private readonly Lazy<Task<IConnectionMultiplexer?>> _connection = new(() => ConnectAsync(configuration, logger));
+
+    public bool IsAvailable => !string.IsNullOrWhiteSpace(GetConnectionString(configuration));
+
+    public async Task PublishActivityEventAsync(ActivityEventResponse activityEvent)
+    {
+        var connection = await GetConnectionAsync();
+        if (connection is null) return;
+
+        try
+        {
+            var payload = JsonSerializer.Serialize(activityEvent, JsonSerializerOptions.Web);
+            await connection.GetSubscriber().PublishAsync(RedisChannel.Literal(ActivityEventsChannel), payload);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Could not publish Redis activity event {EventType}.", activityEvent.EventType);
+        }
+    }
+
+    public async IAsyncEnumerable<ActivityEventResponse> SubscribeActivityEventsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var connection = await GetConnectionAsync();
+        if (connection is null) yield break;
+
+        var channel = Channel.CreateUnbounded<ActivityEventResponse>();
+        var subscriber = connection.GetSubscriber();
+        Action<RedisChannel, RedisValue> handler = (_, value) =>
+        {
+            try
+            {
+                var activityEvent = JsonSerializer.Deserialize<ActivityEventResponse>(value.ToString(), JsonSerializerOptions.Web);
+                if (activityEvent is not null)
+                {
+                    channel.Writer.TryWrite(activityEvent);
+                }
+            }
+            catch (JsonException exception)
+            {
+                logger.LogWarning(exception, "Could not parse Redis activity event payload.");
+            }
+        };
+
+        await subscriber.SubscribeAsync(RedisChannel.Literal(ActivityEventsChannel), handler);
+        try
+        {
+            await foreach (var activityEvent in channel.Reader.ReadAllAsync(cancellationToken))
+            {
+                yield return activityEvent;
+            }
+        }
+        finally
+        {
+            await subscriber.UnsubscribeAsync(RedisChannel.Literal(ActivityEventsChannel), handler);
+            channel.Writer.TryComplete();
+        }
+    }
+
+    private async Task<IConnectionMultiplexer?> GetConnectionAsync()
+    {
+        if (!IsAvailable) return null;
+        return await _connection.Value;
+    }
+
+    private static async Task<IConnectionMultiplexer?> ConnectAsync(IConfiguration configuration, ILogger logger)
+    {
+        var connectionString = GetConnectionString(configuration);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            logger.LogInformation("Redis notifications are disabled because Redis__ConnectionString is not set.");
+            return null;
+        }
+
+        try
+        {
+            return await ConnectionMultiplexer.ConnectAsync(connectionString);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Redis notifications are disabled because Redis could not be reached.");
+            return null;
+        }
+    }
+
+    private static string? GetConnectionString(IConfiguration configuration) =>
+        configuration["Redis:ConnectionString"] ?? Environment.GetEnvironmentVariable("REDIS_CONNECTION_STRING");
+}
 
 internal sealed record AuthResult(TelesaleUserResponse? User, IResult? ErrorResult)
 {

@@ -95,6 +95,15 @@ type Lead = {
   prospects?: LeadProspect[];
   prospectCount: number;
   contactHistoryCount: number;
+  telesaleInstructionSummary?: TelesaleInstructionSummary | null;
+};
+
+type TelesaleInstructionSummary = {
+  instructionCount: number;
+  unacknowledgedInstructionCount: number;
+  replyCount: number;
+  latestInstructionAt?: string | null;
+  latestReplyAt?: string | null;
 };
 
 type LeadDetail = Lead & {
@@ -725,6 +734,31 @@ type WaveLeadTelesalesInstructionModalState = {
     priority: LeadPriority;
   };
   saving: boolean;
+  instructions: LoadState<TelesaleLeadInstruction[]>;
+};
+
+type TelesaleLeadInstructionReply = {
+  id: number;
+  instructionId: number;
+  replyText: string;
+  createdByUserId?: number | null;
+  createdByUserName?: string | null;
+  createdAt: string;
+};
+
+type TelesaleLeadInstruction = {
+  id: number;
+  campaignWaveId: number;
+  leadId: number;
+  instructionText: string;
+  priority: LeadPriority;
+  createdByUserId?: number | null;
+  createdByUserName?: string | null;
+  createdAt: string;
+  acknowledgedAt?: string | null;
+  acknowledgedByUserId?: number | null;
+  acknowledgedByUserName?: string | null;
+  replies: TelesaleLeadInstructionReply[];
 };
 
 type CustomerBusinessTypeOption = {
@@ -2099,6 +2133,7 @@ function App() {
             users={users.data ?? []}
             leadStatuses={leadStatuses.data ?? []}
             responseStatuses={responseStatuses.data ?? []}
+            latestActivityEvent={activityEvents.state.data?.[0] ?? null}
             onDataChanged={refreshData}
           />
         )}
@@ -15142,6 +15177,7 @@ function CampaignsView({
   users,
   leadStatuses,
   responseStatuses,
+  latestActivityEvent,
   onDataChanged
 }: {
   state: LoadState<Campaign[]>;
@@ -15150,6 +15186,7 @@ function CampaignsView({
   users: User[];
   leadStatuses: LeadStatusOption[];
   responseStatuses: ResponseStatusOption[];
+  latestActivityEvent: ActivityEvent | null;
   onDataChanged: () => void;
 }) {
   const [mode, setMode] = useState<"list" | "add">("list");
@@ -15307,6 +15344,15 @@ function CampaignsView({
     }
   }
 
+  useEffect(() => {
+    if (!selectedWaveId || !latestActivityEvent) return;
+    if (!["lead.telesales_instruction.added", "lead.telesales_instruction.replied", "lead.telesales_instruction.acknowledged"].includes(latestActivityEvent.eventType)) {
+      return;
+    }
+
+    void loadWaveLeads(selectedWaveId);
+  }, [latestActivityEvent?.id, selectedWaveId]);
+
   function downloadWaveCsv(waveId: number) {
     const link = document.createElement("a");
     link.href = `${apiBase}/api/campaign-waves/${waveId}/export`;
@@ -15441,8 +15487,38 @@ function CampaignsView({
         instructionText: "",
         priority: "medium"
       },
-      saving: false
+      saving: false,
+      instructions: { loading: true }
     });
+    void loadWaveLeadTelesalesInstructions(waveId, lead.id);
+  }
+
+  async function loadWaveLeadTelesalesInstructions(waveId: number, leadId: number) {
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${waveId}/leads/${leadId}/telesales-instructions`);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+
+      const instructions = await response.json() as TelesaleLeadInstruction[];
+      setWaveLeadTelesalesInstructionModal((current) =>
+        current && current.waveId === waveId && current.lead.id === leadId
+          ? { ...current, instructions: { data: instructions, loading: false } }
+          : current);
+    } catch (error) {
+      setWaveLeadTelesalesInstructionModal((current) =>
+        current && current.waveId === waveId && current.lead.id === leadId
+          ? {
+              ...current,
+              instructions: {
+                data: current.instructions.data,
+                loading: false,
+                error: error instanceof Error ? error.message : "Could not load Telesales instructions."
+              }
+            }
+          : current);
+    }
   }
 
   async function saveWaveLeadTelesalesInstruction(event: FormEvent<HTMLFormElement>) {
@@ -15472,7 +15548,16 @@ function CampaignsView({
         throw new Error(payload?.error ?? `HTTP ${response.status}`);
       }
 
-      setWaveLeadTelesalesInstructionModal(null);
+      const instruction = await response.json() as TelesaleLeadInstruction;
+      setWaveLeadTelesalesInstructionModal((current) => current ? {
+        ...current,
+        form: { instructionText: "", priority: form.priority },
+        saving: false,
+        instructions: {
+          data: [instruction, ...(current.instructions.data ?? [])],
+          loading: false
+        }
+      } : current);
       setNotice({ kind: "success", message: `Telesales instruction added to Lead #${lead.id}.` });
     } catch (error) {
       setWaveLeadTelesalesInstructionModal((current) => current ? { ...current, saving: false } : current);
@@ -15872,7 +15957,19 @@ function CampaignsView({
                                           </tr>
                                         </thead>
                                         <tbody>
-                                          {filteredWaveLeads?.map((lead) => (
+                                          {filteredWaveLeads?.map((lead) => {
+                                            const instructionSummary = lead.telesaleInstructionSummary;
+                                            const hasUnacknowledgedInstruction = (instructionSummary?.unacknowledgedInstructionCount ?? 0) > 0;
+                                            const hasInstructionReply = (instructionSummary?.replyCount ?? 0) > 0;
+                                            const hasInstruction = (instructionSummary?.instructionCount ?? 0) > 0;
+                                            const instructionTitle = hasUnacknowledgedInstruction
+                                              ? `${instructionSummary!.unacknowledgedInstructionCount} instruction${instructionSummary!.unacknowledgedInstructionCount === 1 ? "" : "s"} waiting for Telesales acknowledgement`
+                                              : hasInstructionReply
+                                                ? `${instructionSummary!.replyCount} Telesales repl${instructionSummary!.replyCount === 1 ? "y" : "ies"}`
+                                                : hasInstruction
+                                                  ? `${instructionSummary!.instructionCount} acknowledged instruction${instructionSummary!.instructionCount === 1 ? "" : "s"}`
+                                                  : "Add Telesales instruction";
+                                            return (
                                             <tr key={lead.id}>
                                               <td className="interaction-icon-cell">
                                                 <div className="wave-lead-row-actions">
@@ -15886,12 +15983,17 @@ function CampaignsView({
                                                     <span className="sr-only">Add contact history</span>
                                                   </button>
                                                   <button
-                                                    className="icon-button"
+                                                    className={`icon-button instruction-state-button ${hasUnacknowledgedInstruction ? "instruction-state-button-pending" : hasInstructionReply ? "instruction-state-button-replied" : hasInstruction ? "instruction-state-button-acknowledged" : ""}`}
                                                     type="button"
                                                     onClick={() => openWaveLeadTelesalesInstructionModal(wave.id, lead)}
-                                                    title="Add Telesales instruction"
+                                                    title={instructionTitle}
                                                   >
                                                     <Megaphone size={15} aria-hidden="true" />
+                                                    {hasInstruction ? (
+                                                      <span className="instruction-state-count">
+                                                        {hasUnacknowledgedInstruction ? instructionSummary!.unacknowledgedInstructionCount : hasInstructionReply ? instructionSummary!.replyCount : instructionSummary!.instructionCount}
+                                                      </span>
+                                                    ) : null}
                                                     <span className="sr-only">Add Telesales instruction</span>
                                                   </button>
                                                   {lead.contactHistoryCount > 0 ? (
@@ -15969,7 +16071,8 @@ function CampaignsView({
                                                 </button>
                                               </td>
                                             </tr>
-                                          ))}
+                                            );
+                                          })}
                                         </tbody>
                                       </table>
                                     </section>
@@ -16250,13 +16353,57 @@ function CampaignsView({
               </div>
               <div className="modal-actions">
                 <button className="secondary-action" type="button" onClick={() => setWaveLeadTelesalesInstructionModal(null)}>
-                  Cancel
+                  Close
                 </button>
                 <button className="page-action-button" type="submit" disabled={waveLeadTelesalesInstructionModal.saving}>
                   {waveLeadTelesalesInstructionModal.saving ? "Saving..." : "Add Instruction"}
                 </button>
               </div>
             </form>
+            <div className="modal-body">
+              <div className="section-heading-row">
+                <h4>Conversation</h4>
+                {waveLeadTelesalesInstructionModal.instructions.loading && <span className="muted">Loading...</span>}
+              </div>
+              {waveLeadTelesalesInstructionModal.instructions.error && (
+                <StatusBanner kind="error" message={waveLeadTelesalesInstructionModal.instructions.error} />
+              )}
+              {!waveLeadTelesalesInstructionModal.instructions.loading &&
+                !waveLeadTelesalesInstructionModal.instructions.error &&
+                !waveLeadTelesalesInstructionModal.instructions.data?.length && (
+                  <p className="muted">No instructions have been added for this lead yet.</p>
+                )}
+              {Boolean(waveLeadTelesalesInstructionModal.instructions.data?.length) && (
+                <div className="timeline-list">
+                  {waveLeadTelesalesInstructionModal.instructions.data!.map((instruction) => (
+                    <article className="timeline-entry" key={instruction.id}>
+                      <div className="timeline-entry-header">
+                        <strong>{getLeadPriorityLabel(instruction.priority)}</strong>
+                        <span>{formatDateTime(instruction.createdAt)}</span>
+                      </div>
+                      <p>{instruction.instructionText}</p>
+                      <p className="muted">
+                        From {instruction.createdByUserName ?? "Main App"}
+                        {instruction.acknowledgedAt ? `, acknowledged ${formatDateTime(instruction.acknowledgedAt)}` : ", not acknowledged yet"}
+                      </p>
+                      {instruction.replies.length > 0 && (
+                        <div className="timeline-replies">
+                          {instruction.replies.map((reply) => (
+                            <div className="timeline-reply" key={reply.id}>
+                              <div className="timeline-entry-header">
+                                <strong>{reply.createdByUserName ?? "Telesales"}</strong>
+                                <span>{formatDateTime(reply.createdAt)}</span>
+                              </div>
+                              <p>{reply.replyText}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
         </div>
       )}
@@ -18903,6 +19050,13 @@ function ToastStack({
 }) {
   if (!events.length) return null;
 
+  const describeEvent = (event: ActivityEvent) => {
+    if (event.description && event.description.trim()) return event.description;
+    if (event.eventType === "lead.telesales_instruction.acknowledged") return "A Telesales instruction was acknowledged. Open the wave lead row to see the current message state.";
+    if (event.eventType === "lead.telesales_instruction.replied") return "Telesales replied to an instruction. Open the wave lead row to read the reply.";
+    return "An update was received.";
+  };
+
   return (
     <div className="toast-stack" role="status" aria-live="polite">
       {events.map((event) => (
@@ -18913,7 +19067,7 @@ function ToastStack({
               Ã—
             </button>
           </div>
-          <div>{event.description}</div>
+          <div>{describeEvent(event)}</div>
           <div className="activity-item-meta">
             <span>{event.actorName ?? currentUserName ?? "Unknown user"}</span>
             <span>{formatDateTime(event.createdAt)}</span>
@@ -19070,7 +19224,37 @@ function useActivityEvents(refreshKey: number, currentUserId: string) {
   useEffect(() => {
     let cancelled = false;
 
-    const load = async () => {
+    const addIncomingEvents = (events: ActivityEvent[]) => {
+      if (!events.length) return;
+
+      setState((current) => {
+        const existing = current.data ?? [];
+        const seen = new Set(existing.map((event) => event.id));
+        const merged = [...events.filter((event) => !seen.has(event.id)), ...existing]
+          .sort((left, right) => right.id - left.id)
+          .slice(0, 50);
+        return { data: merged, loading: false };
+      });
+
+      const nextToasts = events
+        .filter((event) =>
+          event.id > latestSeenIdRef.current &&
+          event.isNotifiable &&
+          String(event.actorUserId ?? "") !== currentUserId)
+        .sort((left, right) => left.id - right.id);
+
+      if (nextToasts.length) {
+        setToasts((current) => {
+          const seen = new Set(current.map((event) => event.id));
+          const merged = [...nextToasts.filter((event) => !seen.has(event.id)), ...current];
+          return merged.slice(0, 5);
+        });
+      }
+
+      latestSeenIdRef.current = Math.max(latestSeenIdRef.current, ...events.map((event) => event.id));
+    };
+
+    const loadInitial = async () => {
       try {
         const response = await fetchWithActor(`${apiBase}/api/activity-events?limit=50`, undefined, currentUserId);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -19082,25 +19266,7 @@ function useActivityEvents(refreshKey: number, currentUserId: string) {
         if (!initializedRef.current) {
           latestSeenIdRef.current = latestId;
           initializedRef.current = true;
-          return;
         }
-
-        const nextToasts = data
-          .filter((event) =>
-            event.id > latestSeenIdRef.current &&
-            event.isNotifiable &&
-            String(event.actorUserId ?? "") !== currentUserId)
-          .reverse();
-
-        if (nextToasts.length) {
-          setToasts((current) => {
-            const seen = new Set(current.map((event) => event.id));
-            const merged = [...nextToasts.filter((event) => !seen.has(event.id)), ...current];
-            return merged.slice(0, 5);
-          });
-        }
-
-        latestSeenIdRef.current = Math.max(latestSeenIdRef.current, latestId);
       } catch (error) {
         if (cancelled) return;
         setState((current) => ({
@@ -19111,12 +19277,32 @@ function useActivityEvents(refreshKey: number, currentUserId: string) {
       }
     };
 
-    void load();
-    const timer = window.setInterval(() => void load(), 15000);
+    void loadInitial();
+    const source = new EventSource(`${apiBase}/api/activity-events/stream`);
+    source.addEventListener("activity", (event) => {
+      if (cancelled) return;
+      try {
+        addIncomingEvents([JSON.parse((event as MessageEvent).data) as ActivityEvent]);
+      } catch (error) {
+        setState((current) => ({
+          data: current.data,
+          error: error instanceof Error ? error.message : "Could not parse live activity event.",
+          loading: false
+        }));
+      }
+    });
+    source.onerror = () => {
+      if (cancelled) return;
+      setState((current) => ({
+        data: current.data,
+        error: "Live activity notifications are temporarily unavailable.",
+        loading: false
+      }));
+    };
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      source.close();
     };
   }, [currentUserId, refreshKey]);
 
