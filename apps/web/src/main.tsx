@@ -15438,7 +15438,7 @@ function CampaignsView({
       return;
     }
 
-    if (!["lead.telesales_instruction.added", "lead.telesales_instruction.replied", "lead.telesales_instruction.acknowledged"].includes(latestActivityEvent.eventType)) {
+    if (!["lead.telesales_instruction.added", "lead.telesales_instruction.started", "lead.telesales_instruction.replied", "lead.telesales_instruction.acknowledged"].includes(latestActivityEvent.eventType)) {
       return;
     }
 
@@ -15453,12 +15453,17 @@ function CampaignsView({
       try {
         const activity = JSON.parse((event as MessageEvent).data) as ActivityEvent;
         if (
-          activity.eventType === "telesales.sync.saved" &&
           activity.entityType === "campaign_wave" &&
-          activity.entityId === selectedWaveId
+          activity.entityId === selectedWaveId &&
+          activity.eventType === "telesales.sync.saved"
         ) {
           void loadWaveLeads(selectedWaveId);
           void checkWaveTelesalesInteractions(selectedWaveId, { notify: false });
+          return;
+        }
+
+        if (activity.entityType === "lead" && activity.eventType === "lead.telesales_instruction.started") {
+          void loadWaveLeads(selectedWaveId);
         }
       } catch {
         // Ignore malformed live messages; the manual Check Telesales action remains available.
@@ -19786,6 +19791,7 @@ function ToastStack({
   const describeEvent = (event: ActivityEvent) => {
     if (event.description && event.description.trim()) return event.description;
     if (event.eventType === "lead.telesales_instruction.acknowledged") return "A Telesales instruction was acknowledged. Open the wave lead row to see the current message state.";
+    if (event.eventType === "lead.telesales_instruction.started") return "Telesales started a conversation from their lead screen. Open the wave lead row to read it.";
     if (event.eventType === "lead.telesales_instruction.replied") return "Telesales replied to an instruction. Open the wave lead row to read the reply.";
     return "An update was received.";
   };

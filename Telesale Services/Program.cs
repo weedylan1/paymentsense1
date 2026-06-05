@@ -239,6 +239,45 @@ app.MapPost("/api/waves/{exportId:long}/instructions/{instructionId:long}/replie
         : Results.Ok(created);
 });
 
+app.MapPost("/api/waves/{exportId:long}/leads/{leadId:long}/instructions", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens, RedisNotificationService notifications, long exportId, long leadId, TelesaleInstructionCreateRequest instruction) =>
+{
+    var auth = await AuthenticateAsync(db, request, tokens);
+    if (auth.ErrorResult is not null)
+    {
+        return auth.ErrorResult;
+    }
+
+    var instructionText = NullIfBlank(instruction.InstructionText);
+    if (instructionText is null)
+    {
+        return Results.BadRequest(new { error = "Message text is required." });
+    }
+
+    var priority = NormalizePriority(instruction.Priority);
+    if (!await IsExportAssignedToUserAsync(db, auth.User!.Id, exportId))
+    {
+        return Results.NotFound(new { error = "Wave export was not found for this user." });
+    }
+
+    var created = await CreateTelesalesStartedInstructionAsync(db, auth.User.Id, exportId, leadId, instructionText, priority);
+    if (created is not null)
+    {
+        var context = await LoadInstructionNotificationContextAsync(db, exportId, created.Id);
+        await notifications.PublishActivityEventAsync(ActivityEventResponse.ForNotification(
+            "lead.telesales_instruction.started",
+            "lead",
+            leadId,
+            auth.User.Id,
+            auth.User.FullName,
+            $"Telesales message: {context?.LeadLabel ?? $"Lead #{leadId}"}",
+            $"{auth.User.FullName}: \"{ShortenText(instructionText, 120)}\"{FormatWaveContext(context)}."));
+    }
+
+    return created is null
+        ? Results.NotFound(new { error = "Lead was not found in that wave export." })
+        : Results.Ok(created);
+});
+
 app.MapPost("/api/sync", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens, RedisNotificationService notifications, TelesaleSyncRequest sync) =>
 {
     var auth = await AuthenticateAsync(db, request, tokens);
@@ -716,6 +755,89 @@ static async Task<TelesaleMainInstructionReplyResponse?> CreateInstructionReplyA
             reader.IsDBNull(3) ? null : reader.GetInt64(3),
             reader.IsDBNull(4) ? null : reader.GetString(4),
             reader.GetDateTime(5))
+        : null;
+}
+
+static async Task<TelesaleMainInstructionResponse?> CreateTelesalesStartedInstructionAsync(NpgsqlDataSource db, long userId, long exportId, long leadId, string instructionText, string priority)
+{
+    await using var command = db.CreateCommand("""
+        with export_context as (
+          select
+            campaign_wave_id,
+            export_json::json as export_json
+          from paymentsense_core.telesale_wave_exports
+          where id = @export_id
+        ),
+        exported_lead as (
+          select ec.campaign_wave_id
+          from export_context ec
+          where exists (
+            select 1
+            from json_array_elements(ec.export_json->'leads') lead_json
+            where (lead_json->>'leadId')::bigint = @lead_id
+          )
+        ),
+        inserted as (
+          insert into paymentsense_core.telesale_lead_instructions (
+            campaign_wave_id,
+            lead_id,
+            instruction_text,
+            priority,
+            created_by_user_id,
+            acknowledged_at,
+            acknowledged_by_user_id
+          )
+          select
+            el.campaign_wave_id,
+            @lead_id,
+            @instruction_text,
+            @priority,
+            @user_id,
+            now(),
+            @user_id
+          from exported_lead el
+          returning
+            id,
+            instruction_text,
+            priority,
+            created_at,
+            created_by_user_id,
+            acknowledged_at,
+            acknowledged_by_user_id
+        )
+        select
+          inserted.id,
+          inserted.instruction_text,
+          inserted.priority,
+          inserted.created_at,
+          inserted.created_by_user_id,
+          created_by.full_name,
+          inserted.acknowledged_at,
+          inserted.acknowledged_by_user_id,
+          acknowledged_by.full_name
+        from inserted
+        left join paymentsense_core.users created_by on created_by.id = inserted.created_by_user_id
+        left join paymentsense_core.users acknowledged_by on acknowledged_by.id = inserted.acknowledged_by_user_id
+        """);
+    command.Parameters.AddWithValue("export_id", exportId);
+    command.Parameters.AddWithValue("lead_id", leadId);
+    command.Parameters.AddWithValue("instruction_text", instructionText);
+    command.Parameters.AddWithValue("priority", priority);
+    command.Parameters.AddWithValue("user_id", userId);
+
+    await using var reader = await command.ExecuteReaderAsync();
+    return await reader.ReadAsync()
+        ? new TelesaleMainInstructionResponse(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetDateTime(3),
+            reader.IsDBNull(4) ? null : reader.GetInt64(4),
+            reader.IsDBNull(5) ? null : reader.GetString(5),
+            reader.IsDBNull(6) ? null : reader.GetDateTime(6),
+            reader.IsDBNull(7) ? null : reader.GetInt64(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            [])
         : null;
 }
 
@@ -1381,6 +1503,16 @@ static string? NullIfBlank(string? value)
     return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
 }
 
+static string NormalizePriority(string? priority) =>
+    priority?.Trim().ToLowerInvariant() switch
+    {
+        "very_low" => "very_low",
+        "low" => "low",
+        "high" => "high",
+        "urgent" => "urgent",
+        _ => "medium"
+    };
+
 static async Task WriteSseEventAsync(HttpResponse response, string eventName, object payload, CancellationToken cancellationToken)
 {
     var json = JsonSerializer.Serialize(payload, JsonSerializerOptions.Web);
@@ -1494,6 +1626,7 @@ internal sealed record TelesaleMainContactHistoryResponse(long Id, string Channe
 internal sealed record TelesaleMainInstructionResponse(long Id, string InstructionText, string Priority, DateTime CreatedAt, long? CreatedByUserId, string? CreatedByUserName, DateTime? AcknowledgedAt, long? AcknowledgedByUserId, string? AcknowledgedByUserName, IReadOnlyList<TelesaleMainInstructionReplyResponse> Replies);
 internal sealed record TelesaleMainInstructionReplyResponse(long Id, long InstructionId, string ReplyText, long? CreatedByUserId, string? CreatedByUserName, DateTime CreatedAt);
 internal sealed record TelesaleInstructionReplyCreateRequest(string? ReplyText);
+internal sealed record TelesaleInstructionCreateRequest(string? InstructionText, string? Priority);
 internal sealed record TelesaleInstructionNotificationContext(long LeadId, string InstructionText, string WaveName, string CampaignName, string LeadLabel);
 internal sealed record TelesaleSyncNotificationContext(long WaveId, string? WaveName, string? CampaignName);
 internal sealed record TelesaleLeadInteractionSummaryResponse(long LeadId, int InteractionCount, DateTime LastInteractionAt, string? TelesaleUsers);
