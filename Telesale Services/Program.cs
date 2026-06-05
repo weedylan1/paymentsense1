@@ -239,7 +239,7 @@ app.MapPost("/api/waves/{exportId:long}/instructions/{instructionId:long}/replie
         : Results.Ok(created);
 });
 
-app.MapPost("/api/sync", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens, TelesaleSyncRequest sync) =>
+app.MapPost("/api/sync", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens, RedisNotificationService notifications, TelesaleSyncRequest sync) =>
 {
     var auth = await AuthenticateAsync(db, request, tokens);
     if (auth.ErrorResult is not null)
@@ -247,10 +247,10 @@ app.MapPost("/api/sync", async (NpgsqlDataSource db, HttpRequest request, TokenS
         return auth.ErrorResult;
     }
 
-    return await SaveSyncAsync(db, auth.User!.Id, sync);
+    return await SaveSyncAsync(db, notifications, auth.User!, sync);
 });
 
-app.MapPost("/api/waves/{exportId:long}/sync", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens, long exportId, TelesaleWaveSyncRequest sync) =>
+app.MapPost("/api/waves/{exportId:long}/sync", async (NpgsqlDataSource db, HttpRequest request, TokenService tokens, RedisNotificationService notifications, long exportId, TelesaleWaveSyncRequest sync) =>
 {
     var auth = await AuthenticateAsync(db, request, tokens);
     if (auth.ErrorResult is not null)
@@ -258,7 +258,7 @@ app.MapPost("/api/waves/{exportId:long}/sync", async (NpgsqlDataSource db, HttpR
         return auth.ErrorResult;
     }
 
-    return await SaveSyncAsync(db, auth.User!.Id, new TelesaleSyncRequest(exportId, sync.LeadStates, sync.Interactions, sync.Followups));
+    return await SaveSyncAsync(db, notifications, auth.User!, new TelesaleSyncRequest(exportId, sync.LeadStates, sync.Interactions, sync.Followups));
 });
 
 app.MapGet("/api/campaign-waves/{waveId:long}/interaction-summary", async (NpgsqlDataSource db, long waveId) =>
@@ -773,6 +773,9 @@ static string ShortenText(string text, int maxLength)
 static string FormatWaveContext(TelesaleInstructionNotificationContext? context) =>
     context is null ? "" : $" on {context.CampaignName} / {context.WaveName}.";
 
+static string FormatSyncWaveContext(TelesaleSyncNotificationContext? context) =>
+    context is null ? "" : $" on {context.CampaignName ?? "Campaign"} / {context.WaveName ?? "Wave"}";
+
 static async Task<List<TelesaleMainInstructionResponse>> AttachInstructionRepliesAsync(NpgsqlDataSource db, List<TelesaleMainInstructionResponse> instructions)
 {
     if (instructions.Count == 0)
@@ -826,14 +829,14 @@ static async Task<List<TelesaleMainInstructionResponse>> AttachInstructionReplie
         .ToList();
 }
 
-static async Task<IResult> SaveSyncAsync(NpgsqlDataSource db, long userId, TelesaleSyncRequest sync)
+static async Task<IResult> SaveSyncAsync(NpgsqlDataSource db, RedisNotificationService notifications, TelesaleUserResponse user, TelesaleSyncRequest sync)
 {
     if (sync.ExportId <= 0)
     {
         return Results.BadRequest(new { error = "exportId is required." });
     }
 
-    if (!await IsExportAssignedToUserAsync(db, userId, sync.ExportId))
+    if (!await IsExportAssignedToUserAsync(db, user.Id, sync.ExportId))
     {
         return Results.NotFound(new { error = "Wave export was not found for this user." });
     }
@@ -885,7 +888,7 @@ static async Task<IResult> SaveSyncAsync(NpgsqlDataSource db, long userId, Teles
             """;
         command.Parameters.AddWithValue("export_id", sync.ExportId);
         command.Parameters.AddWithValue("lead_id", state.LeadId);
-        command.Parameters.AddWithValue("telesale_user_id", userId);
+        command.Parameters.AddWithValue("telesale_user_id", user.Id);
         command.Parameters.AddWithValue("priority", (object?)NullIfBlank(state.Priority) ?? DBNull.Value);
         command.Parameters.AddWithValue("status", (object?)NullIfBlank(state.Status) ?? DBNull.Value);
         command.Parameters.AddWithValue("response_status", (object?)FormatJsonValue(state.ResponseStatus) ?? DBNull.Value);
@@ -939,7 +942,7 @@ static async Task<IResult> SaveSyncAsync(NpgsqlDataSource db, long userId, Teles
             """;
         command.Parameters.AddWithValue("export_id", sync.ExportId);
         command.Parameters.AddWithValue("lead_id", interaction.LeadId);
-        command.Parameters.AddWithValue("telesale_user_id", userId);
+        command.Parameters.AddWithValue("telesale_user_id", user.Id);
         command.Parameters.AddWithValue("client_interaction_id", (object?)interaction.Id ?? DBNull.Value);
         command.Parameters.AddWithValue("interaction_type", interactionType);
         command.Parameters.AddWithValue("outcome", (object?)NullIfBlank(interaction.Outcome) ?? DBNull.Value);
@@ -992,7 +995,7 @@ static async Task<IResult> SaveSyncAsync(NpgsqlDataSource db, long userId, Teles
             """;
         command.Parameters.AddWithValue("export_id", sync.ExportId);
         command.Parameters.AddWithValue("lead_id", followUp.LeadId);
-        command.Parameters.AddWithValue("telesale_user_id", userId);
+        command.Parameters.AddWithValue("telesale_user_id", user.Id);
         command.Parameters.AddWithValue("client_followup_id", (object?)followUp.Id ?? DBNull.Value);
         command.Parameters.AddWithValue("scheduled_at", scheduledAt);
         command.Parameters.AddWithValue("notes", (object?)NullIfBlank(followUp.Notes) ?? DBNull.Value);
@@ -1004,7 +1007,43 @@ static async Task<IResult> SaveSyncAsync(NpgsqlDataSource db, long userId, Teles
 
     await transaction.CommitAsync();
 
+    var changedCount = leadStateCount + interactionCount + followUpCount;
+    if (changedCount > 0)
+    {
+        var context = await LoadSyncNotificationContextAsync(db, sync.ExportId);
+        await notifications.PublishActivityEventAsync(ActivityEventResponse.ForNotification(
+            "telesales.sync.saved",
+            "campaign_wave",
+            context?.WaveId,
+            user.Id,
+            user.FullName,
+            $"Telesales changes synced: {context?.WaveName ?? $"Export #{sync.ExportId}"}",
+            $"{user.FullName} synced {leadStateCount} lead state{(leadStateCount == 1 ? "" : "s")}, {interactionCount} interaction{(interactionCount == 1 ? "" : "s")} and {followUpCount} follow-up{(followUpCount == 1 ? "" : "s")}{FormatSyncWaveContext(context)}."));
+    }
+
     return Results.Ok(new TelesaleSyncResponse(sync.ExportId, leadStateCount, interactionCount, followUpCount));
+}
+
+static async Task<TelesaleSyncNotificationContext?> LoadSyncNotificationContextAsync(NpgsqlDataSource db, long exportId)
+{
+    await using var command = db.CreateCommand("""
+        select
+          twe.campaign_wave_id,
+          cw.name as wave_name,
+          c.name as campaign_name
+        from paymentsense_core.telesale_wave_exports twe
+        left join paymentsense_core.campaign_waves cw on cw.id = twe.campaign_wave_id
+        left join paymentsense_core.campaigns c on c.id = cw.campaign_id
+        where twe.id = @export_id
+        """);
+    command.Parameters.AddWithValue("export_id", exportId);
+    await using var reader = await command.ExecuteReaderAsync();
+    return await reader.ReadAsync()
+        ? new TelesaleSyncNotificationContext(
+            reader.GetInt64(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2))
+        : null;
 }
 
 static async Task<IReadOnlyList<TelesaleLeadInteractionSummaryResponse>> LoadCampaignWaveInteractionSummaryAsync(NpgsqlDataSource db, long waveId)
@@ -1455,6 +1494,7 @@ internal sealed record TelesaleMainInstructionResponse(long Id, string Instructi
 internal sealed record TelesaleMainInstructionReplyResponse(long Id, long InstructionId, string ReplyText, long? CreatedByUserId, string? CreatedByUserName, DateTime CreatedAt);
 internal sealed record TelesaleInstructionReplyCreateRequest(string? ReplyText);
 internal sealed record TelesaleInstructionNotificationContext(long LeadId, string InstructionText, string WaveName, string CampaignName, string LeadLabel);
+internal sealed record TelesaleSyncNotificationContext(long WaveId, string? WaveName, string? CampaignName);
 internal sealed record TelesaleLeadInteractionSummaryResponse(long LeadId, int InteractionCount, DateTime LastInteractionAt, string? TelesaleUsers);
 internal sealed record TelesaleLeadInteractionDetailResponse(DateTime OccurredAt, string ActivityType, string Title, string? Details, string? TelesaleUser, string? CampaignName = null, string? WaveName = null);
 internal sealed record ActivityEventResponse(long Id, string EventType, string EntityType, long? EntityId, string Title, string Description, long? ActorUserId, string? ActorName, DateTime CreatedAt, bool IsNotifiable)

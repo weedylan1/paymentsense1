@@ -15428,6 +15428,16 @@ function CampaignsView({
 
   useEffect(() => {
     if (!selectedWaveId || !latestActivityEvent) return;
+    if (latestActivityEvent.eventType === "telesales.sync.saved") {
+      if (latestActivityEvent.entityType !== "campaign_wave" || latestActivityEvent.entityId !== selectedWaveId) {
+        return;
+      }
+
+      void loadWaveLeads(selectedWaveId);
+      void checkWaveTelesalesInteractions(selectedWaveId, { notify: false });
+      return;
+    }
+
     if (!["lead.telesales_instruction.added", "lead.telesales_instruction.replied", "lead.telesales_instruction.acknowledged"].includes(latestActivityEvent.eventType)) {
       return;
     }
@@ -15453,9 +15463,11 @@ function CampaignsView({
     link.remove();
   }
 
-  async function checkWaveTelesalesInteractions(waveId: number) {
+  async function checkWaveTelesalesInteractions(waveId: number, options: { notify?: boolean } = { notify: true }) {
     setWaveInteractionState({ loading: true });
-    setNotice(null);
+    if (options.notify !== false) {
+      setNotice(null);
+    }
 
     try {
       const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${waveId}/telesales-interactions`);
@@ -15466,19 +15478,23 @@ function CampaignsView({
 
       const data = (await response.json()) as TelesaleLeadInteractionSummary[];
       setWaveInteractionState({ data, loading: false });
-      setNotice({
-        kind: "success",
-        message: `${data.length} lead${data.length === 1 ? "" : "s"} in this wave have Telesales interactions.`
-      });
+      if (options.notify !== false) {
+        setNotice({
+          kind: "success",
+          message: `${data.length} lead${data.length === 1 ? "" : "s"} in this wave have Telesales interactions.`
+        });
+      }
     } catch (error) {
       setWaveInteractionState({
         error: error instanceof Error ? error.message : "Could not check Telesales interactions.",
         loading: false
       });
-      setNotice({
-        kind: "error",
-        message: error instanceof Error ? error.message : "Could not check Telesales interactions."
-      });
+      if (options.notify !== false) {
+        setNotice({
+          kind: "error",
+          message: error instanceof Error ? error.message : "Could not check Telesales interactions."
+        });
+      }
     }
   }
 
