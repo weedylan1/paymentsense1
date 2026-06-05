@@ -16013,6 +16013,10 @@ function CampaignsView({
   const managedSelectedCount = waveManageModal
     ? Object.values(waveManageModal.selectedLeadIds).filter(Boolean).length
     : 0;
+  const managedVisibleSelectedCount = waveManageModal
+    ? managedWaveLeads.filter((lead) => waveManageModal.selectedLeadIds[lead.id]).length
+    : 0;
+  const managedAllVisibleSelected = managedWaveLeads.length > 0 && managedVisibleSelectedCount === managedWaveLeads.length;
 
   return (
     <div className="test-page">
@@ -16666,7 +16670,24 @@ function CampaignsView({
                     <table>
                       <thead>
                         <tr>
-                          <th>Select</th>
+                          <th>
+                            <label className="table-checkbox-header">
+                              <input
+                                aria-label={managedAllVisibleSelected ? "Deselect all visible wave leads" : "Select all visible wave leads"}
+                                type="checkbox"
+                                checked={managedAllVisibleSelected}
+                                disabled={!managedWaveLeads.length}
+                                onChange={(event) => setWaveManageModal((current) => current ? {
+                                  ...current,
+                                  selectedLeadIds: {
+                                    ...current.selectedLeadIds,
+                                    ...Object.fromEntries(managedWaveLeads.map((lead) => [lead.id, event.target.checked]))
+                                  }
+                                } : current)}
+                              />
+                              <span>All</span>
+                            </label>
+                          </th>
                           <th>Lead</th>
                           <th>Customer</th>
                           <th>Trading</th>

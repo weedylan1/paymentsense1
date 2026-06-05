@@ -3136,6 +3136,13 @@ tr:last-child td {
   width: 18px;
 }
 
+.table-checkbox-header {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .selected-row {
   background: #eef7f4;
 }
