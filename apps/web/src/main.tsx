@@ -55,6 +55,7 @@ type ActivityEvent = {
   actorName?: string;
   createdAt: string;
   isNotifiable: boolean;
+  metadata?: Record<string, unknown>;
 };
 
 type DataChangeNotice = {
@@ -728,6 +729,50 @@ type TelesaleLeadInteractionDetail = {
   waveName?: string;
 };
 
+type DashboardTelesalesKindOption = {
+  key: string;
+  label: string;
+};
+
+type DashboardTelesalesSettings = {
+  kinds: DashboardTelesalesKindOption[];
+  visibleKinds: string[];
+};
+
+type DashboardTelesalesInteraction = {
+  kind: string;
+  occurredAt: string;
+  leadId: number;
+  waveId: number;
+  campaignName: string;
+  waveName: string;
+  leadLabel: string;
+  telesaleUser?: string;
+  title: string;
+  details?: string;
+  instructionId?: number | null;
+};
+
+type DashboardTelesalesReplyModalState = {
+  item: DashboardTelesalesInteraction;
+  instructions: LoadState<TelesaleLeadInstruction[]>;
+  replyText: string;
+  saving: boolean;
+};
+
+type CampaignWaveOpenRequest = {
+  waveId: number;
+  leadId?: number;
+  requestedAt: number;
+};
+
+type DashboardTelesalesConversationOpenRequest = {
+  waveId: number;
+  leadId: number;
+  instructionId: number;
+  requestedAt: number;
+};
+
 type TelesaleLeadInteractionModalState = {
   waveId: number;
   lead: Lead;
@@ -884,6 +929,8 @@ type LeadCampaignMembership = {
 
 type LeadViewState = {
   searchText: string;
+  postcodeText?: string;
+  postcodeFilterMode?: PostcodeFilterMode;
   statusFilter: string;
   priorityFilter: string;
   assignedUserId: string;
@@ -1030,9 +1077,12 @@ type LoadState<T> = {
 type ProspectPageSortKey = "businessName" | "contactName" | "ownerName" | "postcode" | "addedAt";
 type ProspectTestSortKey = "prospectId" | "businessName" | "contactName" | "createdOn";
 type CustomerPageSortKey = "entityName" | "tradingName" | "postcode" | "addedAt";
+type PostcodeFilterMode = "outward" | "startsWith" | "contains";
 type ProspectPageViewState = {
   searchText: string;
   searchDetails: boolean;
+  postcodeText?: string;
+  postcodeFilterMode?: PostcodeFilterMode;
   ownerFilter?: string;
   addedFrom?: string;
   addedTo?: string;
@@ -1042,6 +1092,7 @@ type ProspectPageViewState = {
 type CustomerPageViewState = {
   searchText: string;
   postcodeText?: string;
+  postcodeFilterMode?: PostcodeFilterMode;
   regionId?: string;
   customerActivityStatusId?: string;
   customerValueTypeId?: string;
@@ -1309,6 +1360,8 @@ function App() {
   const [prospectViewState, setProspectViewState] = useState<ProspectPageViewState>({
     searchText: "",
     searchDetails: false,
+    postcodeText: "",
+    postcodeFilterMode: "outward",
     ownerFilter: "",
     addedFrom: "",
     addedTo: "",
@@ -1318,6 +1371,7 @@ function App() {
   const [customerViewState, setCustomerViewState] = useState<CustomerPageViewState>({
     searchText: "",
     postcodeText: "",
+    postcodeFilterMode: "outward",
     regionId: "",
     customerActivityStatusId: "",
     customerValueTypeId: "",
@@ -1397,6 +1451,7 @@ function App() {
   const [customerMapViewState, setCustomerMapViewState] = useState<CustomerPageViewState>({
     searchText: "",
     postcodeText: "",
+    postcodeFilterMode: "outward",
     regionId: "",
     customerActivityStatusId: "",
     customerValueTypeId: "",
@@ -1415,9 +1470,13 @@ function App() {
   });
   const [customerMapLoadRequest, setCustomerMapLoadRequest] = useState<number | null>(null);
   const [customerMapLeadRequest, setCustomerMapLeadRequest] = useState<Lead[] | null>(null);
+  const [campaignWaveOpenRequest, setCampaignWaveOpenRequest] = useState<CampaignWaveOpenRequest | null>(null);
+  const [dashboardTelesalesConversationOpenRequest, setDashboardTelesalesConversationOpenRequest] = useState<DashboardTelesalesConversationOpenRequest | null>(null);
   const [prospectCleanseViewState, setProspectCleanseViewState] = useState<ProspectPageViewState>({
     searchText: "",
     searchDetails: false,
+    postcodeText: "",
+    postcodeFilterMode: "outward",
     ownerFilter: "",
     addedFrom: "",
     addedTo: "",
@@ -1426,6 +1485,8 @@ function App() {
   });
   const [leadViewState, setLeadViewState] = useState<LeadViewState>({
     searchText: "",
+    postcodeText: "",
+    postcodeFilterMode: "outward",
     statusFilter: "all",
     priorityFilter: "all",
     assignedUserId: "",
@@ -1880,6 +1941,12 @@ function App() {
             onSelectedUserIdChange={setCurrentUserId}
             onOpenProspectTest={openProspectTestFromCustomerFilter}
             onOpenLead={(leadId) => navigateToView(`lead:${leadId}`)}
+            onOpenCampaignWave={(waveId, leadId) => {
+              setCampaignWaveOpenRequest({ waveId, leadId, requestedAt: Date.now() });
+              navigateToView("campaigns");
+            }}
+            telesalesConversationOpenRequest={dashboardTelesalesConversationOpenRequest}
+            onTelesalesConversationOpenRequestHandled={() => setDashboardTelesalesConversationOpenRequest(null)}
             onOpenAiCompanyInsight={openAiCompanyInsightForCustomer}
             onDataChanged={refreshData}
             dataChangeNotice={dataChangeNotice.totalCount > 0 ? dataChangeNotice : null}
@@ -2149,6 +2216,8 @@ function App() {
             leadStatuses={leadStatuses.data ?? []}
             responseStatuses={responseStatuses.data ?? []}
             latestActivityEvent={activityEvents.state.data?.[0] ?? null}
+            openRequest={campaignWaveOpenRequest}
+            onOpenRequestHandled={() => setCampaignWaveOpenRequest(null)}
             onDataChanged={refreshData}
           />
         )}
@@ -2180,6 +2249,14 @@ function App() {
         <ToastStack
           events={activityEvents.toasts}
           currentUserName={currentUser?.fullName}
+          onRespondToTelesalesInstruction={(waveId, leadId, instructionId) => {
+            setDashboardTelesalesConversationOpenRequest({ waveId, leadId, instructionId, requestedAt: Date.now() });
+            navigateToView("dashboard");
+          }}
+          onOpenCampaignWave={(waveId, leadId) => {
+            setCampaignWaveOpenRequest({ waveId, leadId, requestedAt: Date.now() });
+            navigateToView("campaigns");
+          }}
           onDismiss={activityEvents.dismissToast}
         />
       </main>
@@ -3945,6 +4022,9 @@ function DashboardView({
   onSelectedUserIdChange,
   onOpenProspectTest,
   onOpenLead,
+  onOpenCampaignWave,
+  telesalesConversationOpenRequest,
+  onTelesalesConversationOpenRequestHandled,
   onOpenAiCompanyInsight,
   onDataChanged,
   dataChangeNotice,
@@ -3971,6 +4051,9 @@ function DashboardView({
     value: string
   ) => void;
   onOpenLead: (leadId: number) => void;
+  onOpenCampaignWave: (waveId: number, leadId: number) => void;
+  telesalesConversationOpenRequest: DashboardTelesalesConversationOpenRequest | null;
+  onTelesalesConversationOpenRequestHandled: () => void;
   onOpenAiCompanyInsight: (customer: Pick<Customer, "id" | "entityName" | "tradingName" | "postcode" | "hasAiInsightJobScheduled">) => void;
   onDataChanged: () => void;
   dataChangeNotice: DataChangeNotice | null;
@@ -3988,6 +4071,27 @@ function DashboardView({
   const [dashboardCustomerMatchState, setDashboardCustomerMatchState] = useState<LoadState<CustomerMatchResult>>({
     loading: false
   });
+  const dashboardTelesalesOwnerUserId = selectedUserId;
+  const dashboardTelesalesSettingsState = useApi<DashboardTelesalesSettings>(
+    currentUserId ? `/api/dashboard/telesales-settings?userId=${encodeURIComponent(currentUserId)}` : "",
+    0,
+    currentUserId
+  );
+  const [dashboardTelesalesVisibleOverride, setDashboardTelesalesVisibleOverride] = useState<string[] | null>(null);
+  const [dashboardTelesalesKindFilter, setDashboardTelesalesKindFilter] = useState("all");
+  const [dashboardTelesalesRefreshKey, setDashboardTelesalesRefreshKey] = useState(0);
+  const [dashboardTelesalesScrollTop, setDashboardTelesalesScrollTop] = useState(0);
+  const dashboardTelesalesFeedRef = useRef<HTMLDivElement | null>(null);
+  const dashboardTelesalesFeedState = useApi<DashboardTelesalesInteraction[]>(
+    dashboardTelesalesOwnerUserId
+      ? `/api/dashboard/telesales-interactions?userId=${encodeURIComponent(dashboardTelesalesOwnerUserId)}&settingsUserId=${encodeURIComponent(currentUserId)}&kind=${encodeURIComponent(dashboardTelesalesKindFilter)}&limit=80`
+      : currentUserId
+        ? `/api/dashboard/telesales-interactions?userId=0&settingsUserId=${encodeURIComponent(currentUserId)}&kind=${encodeURIComponent(dashboardTelesalesKindFilter)}&limit=80`
+      : "",
+    dashboardTelesalesRefreshKey,
+    currentUserId
+  );
+  const [dashboardTelesalesReplyModal, setDashboardTelesalesReplyModal] = useState<DashboardTelesalesReplyModalState | null>(null);
   const [dashboardLeadSearchText, setDashboardLeadSearchText] = useState("");
   const [dashboardLeadPriorityFilter, setDashboardLeadPriorityFilter] = useState("all");
   const [dashboardLeadSortKey, setDashboardLeadSortKey] = useState<"id" | "customerName" | "tradingName" | "contactEmail" | "postcode" | "leadPriority" | "leadStatus" | "createdAt">("createdAt");
@@ -4019,7 +4123,57 @@ function DashboardView({
 
   useEffect(() => {
     setBookmarkOverrides({});
+    setDashboardTelesalesVisibleOverride(null);
   }, [currentUserId]);
+
+  useEffect(() => {
+    setDashboardTelesalesScrollTop(0);
+    if (dashboardTelesalesFeedRef.current) {
+      dashboardTelesalesFeedRef.current.scrollTop = 0;
+    }
+  }, [dashboardTelesalesOwnerUserId, dashboardTelesalesKindFilter, dashboardTelesalesFeedState.data?.length]);
+
+  useEffect(() => {
+    if (!activityState.data?.length) {
+      return;
+    }
+
+    const latestEvent = activityState.data[0];
+    if ([
+      "telesales.sync.saved",
+      "lead.telesales_instruction.added",
+      "lead.telesales_instruction.started",
+      "lead.telesales_instruction.replied",
+      "lead.telesales_instruction.acknowledged"
+    ].includes(latestEvent.eventType)) {
+      setDashboardTelesalesRefreshKey((current) => current + 1);
+    }
+  }, [activityState.data?.[0]?.id]);
+
+  useEffect(() => {
+    if (!telesalesConversationOpenRequest) {
+      return;
+    }
+
+    const existingItem = (dashboardTelesalesFeedState.data ?? []).find((item) =>
+      item.waveId === telesalesConversationOpenRequest.waveId &&
+      item.leadId === telesalesConversationOpenRequest.leadId &&
+      item.instructionId === telesalesConversationOpenRequest.instructionId);
+    const item = existingItem ?? {
+      kind: "instruction_started",
+      occurredAt: new Date().toISOString(),
+      leadId: telesalesConversationOpenRequest.leadId,
+      waveId: telesalesConversationOpenRequest.waveId,
+      campaignName: "Campaign",
+      waveName: "Wave",
+      leadLabel: `Lead #${telesalesConversationOpenRequest.leadId}`,
+      title: "Telesales message",
+      instructionId: telesalesConversationOpenRequest.instructionId
+    } satisfies DashboardTelesalesInteraction;
+
+    void openDashboardTelesalesConversation(item);
+    onTelesalesConversationOpenRequestHandled();
+  }, [telesalesConversationOpenRequest?.requestedAt]);
 
   useEffect(() => {
     const validIds = new Set(customers.map((customer) => customer.id));
@@ -4090,6 +4244,17 @@ function DashboardView({
   if (!state.data) return <EmptyPanel message="No dashboard data returned." />;
 
   const selectedUser = users.find((user) => String(user.id) === selectedUserId);
+  const dashboardTelesalesOwnerUser = users.find((user) => String(user.id) === dashboardTelesalesOwnerUserId);
+  const dashboardTelesalesKindOptions = dashboardTelesalesSettingsState.data?.kinds ?? [
+    { key: "instruction_started", label: "Telesales messages" },
+    { key: "instruction_added", label: "Main App instructions" },
+    { key: "instruction_reply", label: "Instruction replies" },
+    { key: "interaction", label: "Telesales interactions" },
+    { key: "state_update", label: "Lead state changes" },
+    { key: "follow_up", label: "Follow-ups" }
+  ];
+  const dashboardTelesalesVisibleKinds = dashboardTelesalesVisibleOverride ?? dashboardTelesalesSettingsState.data?.visibleKinds ?? dashboardTelesalesKindOptions.map((kind) => kind.key);
+  const dashboardTelesalesVisibleKindSet = new Set(dashboardTelesalesVisibleKinds);
   const assignedLeads = selectedUser
     ? leads.filter((lead) => lead.assignedUserId === selectedUser.id)
     : [];
@@ -4185,6 +4350,120 @@ function DashboardView({
       });
     } finally {
       setRecalculatingStatistics(false);
+    }
+  }
+
+  async function saveDashboardTelesalesVisibleKinds(nextVisibleKinds: string[]) {
+    if (!currentUserId) return;
+
+    const previous = dashboardTelesalesVisibleOverride ?? dashboardTelesalesSettingsState.data?.visibleKinds ?? [];
+    setDashboardTelesalesVisibleOverride(nextVisibleKinds);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/dashboard/telesales-settings?userId=${encodeURIComponent(currentUserId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visibleKinds: nextVisibleKinds })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      const settings = await response.json() as DashboardTelesalesSettings;
+      setDashboardTelesalesVisibleOverride(settings.visibleKinds);
+      setDashboardTelesalesRefreshKey((current) => current + 1);
+    } catch (error) {
+      setDashboardTelesalesVisibleOverride(previous);
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not save Telesales dashboard settings."
+      });
+    }
+  }
+
+  async function openDashboardTelesalesConversation(item: DashboardTelesalesInteraction) {
+    if (!item.instructionId) return;
+
+    setDashboardTelesalesReplyModal({
+      item,
+      instructions: { loading: true },
+      replyText: "",
+      saving: false
+    });
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${item.waveId}/leads/${item.leadId}/telesales-instructions`);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      const instructions = await response.json() as TelesaleLeadInstruction[];
+      setDashboardTelesalesReplyModal((current) =>
+        current && current.item.instructionId === item.instructionId
+          ? { ...current, instructions: { data: instructions, loading: false } }
+          : current
+      );
+    } catch (error) {
+      setDashboardTelesalesReplyModal((current) =>
+        current && current.item.instructionId === item.instructionId
+          ? {
+              ...current,
+              instructions: {
+                data: current.instructions.data,
+                error: error instanceof Error ? error.message : "Could not load Telesales conversation.",
+                loading: false
+              }
+            }
+          : current
+      );
+    }
+  }
+
+  async function saveDashboardTelesalesReply() {
+    if (!dashboardTelesalesReplyModal?.item.instructionId || !dashboardTelesalesReplyModal.replyText.trim()) {
+      return;
+    }
+
+    const item = dashboardTelesalesReplyModal.item;
+    setDashboardTelesalesReplyModal((current) => current ? { ...current, saving: true } : current);
+    setNotice(null);
+
+    try {
+      const response = await fetchWithActor(`${apiBase}/api/campaign-waves/${item.waveId}/leads/${item.leadId}/telesales-instructions/${item.instructionId}/replies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ replyText: dashboardTelesalesReplyModal.replyText })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      const reply = await response.json() as TelesaleLeadInstructionReply;
+      setDashboardTelesalesReplyModal((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          replyText: "",
+          saving: false,
+          instructions: {
+            data: (current.instructions.data ?? []).map((instruction) =>
+              instruction.id === item.instructionId
+                ? { ...instruction, replies: [...instruction.replies, reply] }
+                : instruction
+            ),
+            loading: false
+          }
+        };
+      });
+      setDashboardTelesalesRefreshKey((current) => current + 1);
+      setNotice({ kind: "success", message: "Reply added to the Telesales conversation." });
+    } catch (error) {
+      setDashboardTelesalesReplyModal((current) => current ? { ...current, saving: false } : current);
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not add reply."
+      });
     }
   }
 
@@ -4612,6 +4891,16 @@ function DashboardView({
     setDashboardCustomerSortDirection(nextKey === "addedAt" ? "desc" : "asc");
   }
 
+  const dashboardTelesalesRows = dashboardTelesalesFeedState.data ?? [];
+  const dashboardTelesalesRowHeight = 96;
+  const dashboardTelesalesViewportHeight = Math.min(420, Math.max(dashboardTelesalesRowHeight, dashboardTelesalesRows.length * dashboardTelesalesRowHeight));
+  const dashboardTelesalesStartIndex = Math.max(0, Math.floor(dashboardTelesalesScrollTop / dashboardTelesalesRowHeight) - 4);
+  const dashboardTelesalesEndIndex = Math.min(
+    dashboardTelesalesRows.length,
+    Math.ceil((dashboardTelesalesScrollTop + dashboardTelesalesViewportHeight) / dashboardTelesalesRowHeight) + 4
+  );
+  const visibleDashboardTelesalesRows = dashboardTelesalesRows.slice(dashboardTelesalesStartIndex, dashboardTelesalesEndIndex);
+
   return (
     <div className="test-page">
       <section className="table-controls">
@@ -4661,6 +4950,118 @@ function DashboardView({
         onRecalculate={() => void recalculateStatistics()}
       />
       {notice && <StatusBanner kind={notice.kind} message={notice.message} />}
+      {currentUserId && (
+        <section className="detail-panel dashboard-telesales-panel">
+          <div className="detail-header">
+            <div>
+              <span className="eyebrow">Telesales activity</span>
+              <h3>{dashboardTelesalesOwnerUser ? dashboardTelesalesOwnerUser.fullName : "All users"}</h3>
+              <p>Newest Telesales changes for assigned leads.</p>
+            </div>
+            <div className="panel-actions">
+              <button className="secondary-action" type="button" onClick={() => setDashboardTelesalesRefreshKey((current) => current + 1)}>
+                Refresh
+              </button>
+            </div>
+          </div>
+          <section className="table-controls dashboard-telesales-controls">
+            <div className="table-search table-search-compact">
+              <label htmlFor="dashboard-telesales-kind-filter">Kind</label>
+              <select
+                id="dashboard-telesales-kind-filter"
+                className="header-select"
+                value={dashboardTelesalesKindFilter}
+                onChange={(event) => setDashboardTelesalesKindFilter(event.target.value)}
+              >
+                <option value="all">All visible kinds</option>
+                {dashboardTelesalesKindOptions.map((kind) => (
+                  <option key={kind.key} value={kind.key} disabled={!dashboardTelesalesVisibleKindSet.has(kind.key)}>
+                    {kind.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="dashboard-telesales-settings" aria-label="Telesales dashboard interaction kinds">
+              {dashboardTelesalesKindOptions.map((kind) => (
+                <label key={kind.key} className="dashboard-telesales-kind-toggle">
+                  <input
+                    type="checkbox"
+                    checked={dashboardTelesalesVisibleKindSet.has(kind.key)}
+                    onChange={(event) => {
+                      const nextKinds = event.target.checked
+                        ? [...dashboardTelesalesVisibleKinds, kind.key]
+                        : dashboardTelesalesVisibleKinds.filter((currentKind) => currentKind !== kind.key);
+                      void saveDashboardTelesalesVisibleKinds(nextKinds);
+                      if (!event.target.checked && dashboardTelesalesKindFilter === kind.key) {
+                        setDashboardTelesalesKindFilter("all");
+                      }
+                    }}
+                    disabled={dashboardTelesalesSettingsState.loading}
+                  />
+                  <span>{kind.label}</span>
+                </label>
+              ))}
+            </div>
+          </section>
+          {dashboardTelesalesFeedState.error && <StatusBanner kind="error" message={dashboardTelesalesFeedState.error} />}
+          {dashboardTelesalesFeedState.loading && !dashboardTelesalesFeedState.data ? (
+            <PanelSkeleton />
+          ) : dashboardTelesalesRows.length ? (
+            <div
+              ref={dashboardTelesalesFeedRef}
+              className="dashboard-telesales-feed dashboard-telesales-feed-virtual"
+              style={{ height: dashboardTelesalesViewportHeight }}
+              onScroll={(event) => setDashboardTelesalesScrollTop(event.currentTarget.scrollTop)}
+            >
+              <div className="dashboard-telesales-feed-spacer" style={{ height: dashboardTelesalesRows.length * dashboardTelesalesRowHeight }}>
+              {visibleDashboardTelesalesRows.map((item, virtualIndex) => {
+                const index = dashboardTelesalesStartIndex + virtualIndex;
+                const kindLabel = dashboardTelesalesKindOptions.find((kind) => kind.key === item.kind)?.label ?? item.kind;
+                return (
+                  <article
+                    className={`dashboard-telesales-feed-item dashboard-telesales-feed-item-virtual dashboard-telesales-kind-${item.kind}`}
+                    key={`${item.kind}-${item.occurredAt}-${item.leadId}-${index}`}
+                    style={{
+                      height: dashboardTelesalesRowHeight,
+                      transform: `translateY(${index * dashboardTelesalesRowHeight}px)`
+                    }}
+                  >
+                    <div className="dashboard-telesales-feed-main">
+                      <div className="dashboard-telesales-feed-header">
+                        <Badge text={kindLabel} />
+                        <strong>{item.title}</strong>
+                        <span>{formatDateTime(item.occurredAt)}</span>
+                      </div>
+                      <div className="dashboard-telesales-feed-meta">
+                        <button className="row-link" type="button" onClick={() => onOpenLead(item.leadId)}>
+                          Lead #{item.leadId}
+                        </button>
+                        <span>{item.leadLabel}</span>
+                        <span>{item.campaignName} / {item.waveName}</span>
+                        {item.telesaleUser && <span>{item.telesaleUser}</span>}
+                      </div>
+                      {item.details && <p>{item.details}</p>}
+                    </div>
+                    <div className="dashboard-telesales-feed-actions">
+                      <button className="secondary-action" type="button" onClick={() => onOpenCampaignWave(item.waveId, item.leadId)}>
+                        Open Wave
+                      </button>
+                      {item.instructionId && (
+                        <button className="secondary-action" type="button" onClick={() => void openDashboardTelesalesConversation(item)}>
+                          Respond
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+              </div>
+            </div>
+          ) : (
+            <p className="muted">No Telesales activity for these visible kinds.</p>
+          )}
+        </section>
+      )}
       {selectedUser && (
         <section className="detail-panel dashboard-assigned-customers-panel">
           <div className="detail-header">
@@ -4863,7 +5264,7 @@ function DashboardView({
                       </select>
                     </td>
                     <td>{row.regionName ?? ""}</td>
-                    <td className="mono">{row.postcode ?? ""}</td>
+                    <td className="mono">{formatUkPostcode(row.postcode)}</td>
                     <td>{renderCustomerStatus(row.status, row.customerKind, row.hasNotes, row.hasOwnedChecklistMatch, row.customerValueTypeImageFileName, row.attachedProspectCount, () => void openCustomerNotes(row), () => void openOwnedChecklist(row))}</td>
                     <td>{formatDateTime(row.addedAt)}</td>
                   </tr>
@@ -4906,6 +5307,78 @@ function DashboardView({
         </div>
         <ActivityEventList state={activityState} />
       </section>
+      {dashboardTelesalesReplyModal && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel modal-panel-wide dashboard-telesales-reply-modal" aria-modal="true" aria-labelledby="dashboard-telesales-reply-title" role="dialog">
+            <div className="modal-header">
+              <div>
+                <span className="eyebrow">Telesales conversation</span>
+                <h3 id="dashboard-telesales-reply-title">Lead #{dashboardTelesalesReplyModal.item.leadId}</h3>
+                <p>{dashboardTelesalesReplyModal.item.campaignName} / {dashboardTelesalesReplyModal.item.waveName}</p>
+              </div>
+              <button className="secondary-action" type="button" onClick={() => setDashboardTelesalesReplyModal(null)}>
+                Close
+              </button>
+            </div>
+            {dashboardTelesalesReplyModal.instructions.loading && <PanelSkeleton />}
+            {dashboardTelesalesReplyModal.instructions.error && <StatusBanner kind="error" message={dashboardTelesalesReplyModal.instructions.error} />}
+            {dashboardTelesalesReplyModal.instructions.data?.length ? (
+              <div className="dashboard-telesales-conversation-list">
+                {dashboardTelesalesReplyModal.instructions.data.map((instruction) => (
+                  <article className="timeline-entry" key={instruction.id}>
+                    <div className="timeline-entry-header">
+                      <strong>{getLeadPriorityLabel(instruction.priority)}</strong>
+                      <span>{formatDateTime(instruction.createdAt)}</span>
+                    </div>
+                    <p>{instruction.instructionText}</p>
+                    <div className="muted">
+                      From {instruction.createdByUserName ?? "Main App"}
+                      {instruction.acknowledgedAt ? `, acknowledged ${formatDateTime(instruction.acknowledgedAt)}` : ", not acknowledged yet"}
+                    </div>
+                    {instruction.replies.length > 0 && (
+                      <div className="instruction-reply-list">
+                        {instruction.replies.map((reply) => (
+                          <div className="instruction-reply" key={reply.id}>
+                            <p>{reply.replyText}</p>
+                            <div className="muted">
+                              {reply.createdByUserName ?? "User"} - {formatDateTime(reply.createdAt)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            ) : !dashboardTelesalesReplyModal.instructions.loading && (
+              <p className="muted">No conversation entries found.</p>
+            )}
+            <div className="table-search">
+              <label htmlFor="dashboard-telesales-reply-text">Reply</label>
+              <textarea
+                id="dashboard-telesales-reply-text"
+                rows={4}
+                value={dashboardTelesalesReplyModal.replyText}
+                onChange={(event) => setDashboardTelesalesReplyModal((current) => current ? { ...current, replyText: event.target.value } : current)}
+                placeholder="Add a reply for the Telesales user"
+              />
+            </div>
+            <div className="modal-actions">
+              <button className="secondary-action" type="button" onClick={() => setDashboardTelesalesReplyModal(null)}>
+                Cancel
+              </button>
+              <button
+                className="page-action-button"
+                type="button"
+                onClick={() => void saveDashboardTelesalesReply()}
+                disabled={dashboardTelesalesReplyModal.saving || !dashboardTelesalesReplyModal.replyText.trim()}
+              >
+                {dashboardTelesalesReplyModal.saving ? "Saving..." : "Send Reply"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       <CustomerNotesModal
         state={noteModalState}
         onClose={() => setNoteModalState({ open: false, notesState: { loading: false }, noteText: "", notedAt: "", saving: false })}
@@ -6419,6 +6892,10 @@ function ProspectsView({
             }
           }
 
+          if (!matchesPostcodeFilter(row.postcode, viewState.postcodeText, viewState.postcodeFilterMode ?? "outward")) {
+            return false;
+          }
+
           const query = viewState.searchText.trim().toLowerCase();
           if (!query) return true;
 
@@ -6784,9 +7261,9 @@ function ProspectsView({
 
   return (
     <>
-      <section className="table-controls">
-        <div className="table-search-group">
-          <div className="table-search">
+      <section className="table-controls prospects-header-controls">
+        <div className="table-search-group prospects-filter-grid">
+          <div className="table-search prospects-search-wide">
             <label htmlFor="prospect-page-search">Search prospects</label>
             <input
               id="prospect-page-search"
@@ -6796,7 +7273,29 @@ function ProspectsView({
               placeholder={viewState.searchDetails ? "Prospect, contact, postcode, or stored detail" : "Prospect, contact, or postcode"}
             />
           </div>
-          <div className="table-search">
+          <div className="table-search prospects-filter-small">
+            <label htmlFor="prospect-page-postcode">Filter by postcode</label>
+            <input
+              id="prospect-page-postcode"
+              type="search"
+              value={viewState.postcodeText ?? ""}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, postcodeText: event.target.value }))}
+              placeholder="Postcode"
+            />
+          </div>
+          <div className="table-search prospects-filter-small">
+            <label htmlFor="prospect-page-postcode-mode">Postcode match</label>
+            <select
+              id="prospect-page-postcode-mode"
+              value={viewState.postcodeFilterMode ?? "outward"}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, postcodeFilterMode: event.target.value as PostcodeFilterMode }))}
+            >
+              <option value="outward">Outward code</option>
+              <option value="startsWith">Starts with</option>
+              <option value="contains">Contains</option>
+            </select>
+          </div>
+          <div className="table-search prospects-filter-date">
             <label htmlFor="prospect-page-added-from">Added from</label>
             <input
               id="prospect-page-added-from"
@@ -6805,7 +7304,7 @@ function ProspectsView({
               onChange={(event) => onViewStateChange((current) => ({ ...current, addedFrom: event.target.value }))}
             />
           </div>
-          <div className="table-search">
+          <div className="table-search prospects-filter-date">
             <label htmlFor="prospect-page-added-to">Added to</label>
             <input
               id="prospect-page-added-to"
@@ -6847,6 +7346,8 @@ function ProspectsView({
               onViewStateChange({
                 searchText: "",
                 searchDetails: false,
+                postcodeText: "",
+                postcodeFilterMode: "outward",
                 ownerFilter: "",
                 addedFrom: "",
                 addedTo: "",
@@ -6986,7 +7487,7 @@ function ProspectsView({
               <td>{row.contactName ?? ""}</td>
               <td><CopyableEmail email={row.contactEmail} /></td>
               <td>{row.ownerName ?? ""}</td>
-              <td className="mono">{row.postcode ?? ""}</td>
+              <td className="mono">{formatUkPostcode(row.postcode)}</td>
               <td>{row.hasPaymentsenseCustomerMatch ? <Badge text="PS match" /> : ""}</td>
             </tr>
             {row.prospectId === selectedProspectId && (
@@ -7378,7 +7879,10 @@ function CustomerGeographyView({
     params.set("page", String(page));
     params.set("pageSize", String(pageSize));
     if (viewState.searchText.trim()) params.set("searchText", viewState.searchText.trim());
-    if (viewState.postcodeText?.trim()) params.set("postcodeText", viewState.postcodeText.trim());
+    if (viewState.postcodeText?.trim()) {
+      params.set("postcodeText", viewState.postcodeText.trim());
+      params.set("postcodeFilterMode", viewState.postcodeFilterMode ?? "outward");
+    }
     if (viewState.regionId) params.set("regionId", viewState.regionId);
     if (viewState.customerActivityStatusId) params.set("customerActivityStatusId", viewState.customerActivityStatusId);
     if (viewState.customerValueTypeId) {
@@ -7461,6 +7965,19 @@ function CustomerGeographyView({
   }, [selectedMapRows, mapSelectionSource]);
 
   useEffect(() => {
+    if (mapSelectionSource !== "leads" || Object.keys(selectedMapRows).length > 0 || leadRowsToLoad?.length || savedMapIdToLoad) {
+      return;
+    }
+
+    setMapSelectionSource("customers");
+    onViewStateChange((current) => ({
+      ...current,
+      onlyCancelled: true,
+      onlyMapped: false
+    }));
+  }, [mapSelectionSource, selectedMapRows, leadRowsToLoad, savedMapIdToLoad]);
+
+  useEffect(() => {
     if (!savedMapIdToLoad) return;
     let cancelled = false;
     fetchWithActor(`${apiBase}/api/customer-map/saved/${savedMapIdToLoad}`)
@@ -7483,7 +8000,7 @@ function CustomerGeographyView({
           const leadIds = new Set(map.leadIds);
           const customerIds = new Set(map.customerIds);
           const savedLeads = availableLeads.filter((lead) =>
-            lead.customerId !== undefined &&
+            typeof lead.customerId === "number" &&
             (leadIds.size ? leadIds.has(lead.id) : customerIds.has(lead.customerId))
           );
           for (const lead of savedLeads) {
@@ -7522,7 +8039,7 @@ function CustomerGeographyView({
     if (!leadRowsToLoad?.length) return;
 
     const nextRows: Record<number, CustomerMapRow> = {};
-    const mappableLeads = leadRowsToLoad.filter((lead) => lead.customerId !== undefined);
+    const mappableLeads = leadRowsToLoad.filter((lead) => typeof lead.customerId === "number");
     for (const lead of mappableLeads) {
       nextRows[lead.customerId!] = leadToMapRow(lead);
     }
@@ -7551,8 +8068,7 @@ function CustomerGeographyView({
         viewState.sortDirection
       )
     );
-  const customerTableRows = viewState.onlyMapped ? customerRowsInMap : rows;
-  const filteredLeadRows = selectedRows.filter((row) => {
+  function matchesGeographyRowFilters(row: CustomerMapRow) {
     const query = viewState.searchText.trim().toLowerCase();
     if (query) {
       const searchable = [
@@ -7571,8 +8087,7 @@ function CustomerGeographyView({
       if (!searchable.filter(Boolean).some((value) => value!.toLowerCase().includes(query))) return false;
     }
 
-    const postcodeQuery = viewState.postcodeText?.trim().toLowerCase();
-    if (postcodeQuery && !(row.postcode ?? "").toLowerCase().includes(postcodeQuery)) return false;
+    if (!matchesPostcodeFilter(row.postcode, viewState.postcodeText, viewState.postcodeFilterMode ?? "outward")) return false;
     if (viewState.regionId && String(row.regionId ?? "") !== viewState.regionId) return false;
     if (viewState.customerActivityStatusId && String(row.customerActivityStatusId ?? "") !== viewState.customerActivityStatusId) return false;
     if (viewState.customerValueTypeId) {
@@ -7584,17 +8099,30 @@ function CustomerGeographyView({
       if (viewState.assignedUserId !== "__unassigned__" && String(row.assignedUserId ?? "") !== viewState.assignedUserId) return false;
     }
     if (viewState.addedFrom && viewState.addedFrom !== "all" && row.leadPriority !== viewState.addedFrom) return false;
+    if (viewState.onlyBookmarked && !row.isBookmarked) return false;
     if (viewState.onlyMatched && !row.hasStoredMatches) return false;
     if (viewState.onlyCancelled && row.status?.toLowerCase() !== "cancelled") return false;
     return true;
-  }).sort((left, right) =>
+  }
+
+  const filteredCustomerRowsInMap = customerRowsInMap
+    .filter(matchesGeographyRowFilters)
+    .sort((left, right) =>
+      compareValues(
+        viewState.sortKey === "postcode" ? left.postcode ?? "" : left.entityName,
+        viewState.sortKey === "postcode" ? right.postcode ?? "" : right.entityName,
+        viewState.sortDirection
+      )
+    );
+  const customerTableRows = viewState.onlyMapped ? filteredCustomerRowsInMap : rows;
+  const filteredLeadRows = selectedRows.filter(matchesGeographyRowFilters).sort((left, right) =>
     compareValues(
       viewState.sortKey === "postcode" ? left.postcode ?? "" : left.entityName,
       viewState.sortKey === "postcode" ? right.postcode ?? "" : right.entityName,
       viewState.sortDirection
     )
   );
-  const displayedMapRows = mapSelectionSource === "leads" ? filteredLeadRows : selectedRows;
+  const displayedMapRows = mapSelectionSource === "leads" ? filteredLeadRows : filteredCustomerRowsInMap;
   const mappedSelectedRows = displayedMapRows.filter((row) => typeof row.latitude === "number" && typeof row.longitude === "number");
   const totalPages = Math.max(Math.ceil((state.data?.total ?? 0) / pageSize), 1);
 
@@ -7618,7 +8146,7 @@ function CustomerGeographyView({
         <strong>${escapeHtml(row.entityName)}</strong><br/>
         ${row.tradingName ? `${escapeHtml(row.tradingName)}<br/>` : ""}
         ${row.tradingAddress ? `${escapeHtml(row.tradingAddress)}<br/>` : ""}
-        ${row.postcode ? `${escapeHtml(row.postcode)}<br/>` : ""}
+        ${row.postcode ? `${escapeHtml(formatUkPostcode(row.postcode))}<br/>` : ""}
         <span>${escapeHtml(row.geocodeAccuracy === "approximate" ? "Approximate location" : "Mapped location")}</span>
       `);
       marker.addTo(layer);
@@ -7660,6 +8188,7 @@ function CustomerGeographyView({
     onViewStateChange({
       searchText: "",
       postcodeText: "",
+      postcodeFilterMode: "outward",
       regionId: "",
       customerActivityStatusId: "",
       customerValueTypeId: "",
@@ -7679,55 +8208,31 @@ function CustomerGeographyView({
   }
 
   async function geocodeRows(customerIds: number[]) {
-    const ids = customerIds.filter((id) => !mappingIds.has(id));
+    const ids = Array.from(new Set(customerIds.filter((id): id is number => typeof id === "number" && Number.isFinite(id))))
+      .filter((id) => !mappingIds.has(id));
     if (!ids.length) return;
 
     setMappingIds((current) => new Set([...current, ...ids]));
     setNotice(null);
     try {
-      const response = await fetchWithActor(`${apiBase}/api/customer-map/geocode`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customerIds: ids })
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      const results: CustomerMapGeocodeResult[] = [];
+      const batches = chunkArray(ids, 20);
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+        const response = await fetchWithActor(`${apiBase}/api/customer-map/geocode`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customerIds: batches[batchIndex] })
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null) as { error?: string } | null;
+          throw new Error(payload?.error ?? `HTTP ${response.status}`);
+        }
+        const payload = await response.json() as CustomerMapGeocodeResponse;
+        results.push(...payload.results);
+        applyGeocodeResults(payload.results);
+        if (batchIndex < batches.length - 1) await wait(150);
       }
-      const payload = await response.json() as CustomerMapGeocodeResponse;
-      setCoordinateOverrides((current) => {
-        const next = { ...current };
-        for (const result of payload.results) {
-          next[result.customerId] = {
-            latitude: result.latitude,
-            longitude: result.longitude,
-            geocodeAccuracy: result.accuracy,
-            geocodeStatus: result.status
-          };
-        }
-        return next;
-      });
-      setSelectedMapRows((current) => {
-        const next = { ...current };
-        for (const result of payload.results) {
-          const existing = next[result.customerId] ?? {
-            id: result.customerId,
-            addedAt: "",
-            entityName: `Customer ${result.customerId}`,
-            isBookmarked: false,
-            hasStoredMatches: false
-          };
-          next[result.customerId] = {
-            ...existing,
-            latitude: result.latitude,
-            longitude: result.longitude,
-            geocodeAccuracy: result.accuracy,
-            geocodeStatus: result.status
-          };
-        }
-        return next;
-      });
-      const failed = payload.results.filter((result) => result.status !== "mapped");
+      const failed = results.filter((result) => result.status !== "mapped");
       if (failed.length) {
         setNotice({ kind: "error", message: `${failed.length} selected customer location${failed.length === 1 ? "" : "s"} could not be mapped.` });
       }
@@ -7740,6 +8245,41 @@ function CustomerGeographyView({
         return next;
       });
     }
+  }
+
+  function applyGeocodeResults(results: CustomerMapGeocodeResult[]) {
+    setCoordinateOverrides((current) => {
+      const next = { ...current };
+      for (const result of results) {
+        next[result.customerId] = {
+          latitude: result.latitude,
+          longitude: result.longitude,
+          geocodeAccuracy: result.accuracy,
+          geocodeStatus: result.status
+        };
+      }
+      return next;
+    });
+    setSelectedMapRows((current) => {
+      const next = { ...current };
+      for (const result of results) {
+        const existing = next[result.customerId] ?? {
+          id: result.customerId,
+          addedAt: "",
+          entityName: `Customer ${result.customerId}`,
+          isBookmarked: false,
+          hasStoredMatches: false
+        };
+        next[result.customerId] = {
+          ...existing,
+          latitude: result.latitude,
+          longitude: result.longitude,
+          geocodeAccuracy: result.accuracy,
+          geocodeStatus: result.status
+        };
+      }
+      return next;
+    });
   }
 
   function toggleSelected(row: CustomerMapRow, checked: boolean) {
@@ -7836,6 +8376,7 @@ function CustomerGeographyView({
     onViewStateChange({
       searchText: "",
       postcodeText: "",
+      postcodeFilterMode: "outward",
       regionId: "",
       customerActivityStatusId: "",
       customerValueTypeId: "",
@@ -7871,6 +8412,18 @@ function CustomerGeographyView({
           <div className="table-search customer-search-postcode">
             <label htmlFor="geography-postcode">Filter by postcode</label>
             <input id="geography-postcode" type="search" value={viewState.postcodeText ?? ""} onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, postcodeText: event.target.value })); }} placeholder="Postcode" />
+          </div>
+          <div className="table-search table-search-compact">
+            <label htmlFor="geography-postcode-mode">Postcode match</label>
+            <select
+              id="geography-postcode-mode"
+              value={viewState.postcodeFilterMode ?? "outward"}
+              onChange={(event) => { setPage(1); onViewStateChange((current) => ({ ...current, postcodeFilterMode: event.target.value as PostcodeFilterMode })); }}
+            >
+              <option value="outward">Outward code</option>
+              <option value="startsWith">Starts with</option>
+              <option value="contains">Contains</option>
+            </select>
           </div>
           <div className="customer-inline-filters">
             {mapSelectionSource === "customers" ? (
@@ -7930,7 +8483,7 @@ function CustomerGeographyView({
       <div className={mapExpanded ? "geography-layout geography-layout-map-expanded" : "geography-layout"}>
         <section className="geography-list">
           <div className="geography-list-toolbar">
-            <span>{mapSelectionSource === "leads" ? `${selectedRows.length} selected leads` : `${viewState.onlyMapped ? customerRowsInMap.length : state.data?.total ?? 0} filtered customers`}</span>
+            <span>{mapSelectionSource === "leads" ? `${selectedRows.length} selected leads` : `${viewState.onlyMapped ? filteredCustomerRowsInMap.length : state.data?.total ?? 0} filtered customers`}</span>
             {mapSelectionSource === "leads" ? <span>{filteredLeadRows.length} after filters</span> : null}
             <span>{mappedSelectedRows.length} mapped {mapSelectionSource === "leads" ? "leads" : "selections"}</span>
             <button className="secondary-action" type="button" disabled={mappedSelectedRows.length === 0} onClick={fitSelectedMarkers}>Fit selected</button>
@@ -7970,7 +8523,7 @@ function CustomerGeographyView({
                     <td><strong className="stacked">{row.entityName}</strong><span>{row.tradingName ?? row.customerRef ?? row.mid ?? ""}</span></td>
                     <td>{row.assignedUserName ?? "Unassigned"}</td>
                     <td className="truncate">{row.tradingAddress ?? ""}</td>
-                    <td className="mono">{row.postcode ?? ""}</td>
+                    <td className="mono">{formatUkPostcode(row.postcode)}</td>
                     <td>{getLeadPriorityLabel(row.leadPriority ?? "medium")}</td>
                     <td>
                       {mapping ? (
@@ -8012,7 +8565,7 @@ function CustomerGeographyView({
                       <td><input type="checkbox" checked={selected} onClick={(event) => event.stopPropagation()} onChange={(event) => toggleSelected(row, event.target.checked)} aria-label={`Show ${row.entityName} on map`} /></td>
                       <td><strong className="stacked">{row.entityName}</strong><span>{row.tradingName ?? row.customerRef ?? row.mid ?? ""}</span></td>
                       <td className="truncate">{row.tradingAddress ?? ""}</td>
-                      <td className="mono">{row.postcode ?? ""}</td>
+                      <td className="mono">{formatUkPostcode(row.postcode)}</td>
                       <td>{renderCustomerStatus(row.status, "customer", false, false, undefined, 0)}</td>
                       <td>
                         {mapping ? (
@@ -8844,8 +9397,7 @@ function CustomersView({
         }
       }
 
-      const postcodeQuery = viewState.postcodeText?.trim().toLowerCase() ?? "";
-      if (postcodeQuery && !(row.postcode ?? "").toLowerCase().includes(postcodeQuery)) {
+      if (!matchesPostcodeFilter(row.postcode, viewState.postcodeText, viewState.postcodeFilterMode ?? "outward")) {
         return false;
       }
 
@@ -8982,6 +9534,7 @@ function CustomersView({
     onViewStateChange({
       searchText: "",
       postcodeText: "",
+      postcodeFilterMode: "outward",
       regionId: "",
       customerActivityStatusId: "",
       customerValueTypeId: "",
@@ -9132,6 +9685,18 @@ function CustomersView({
                 onChange={(event) => onViewStateChange((current) => ({ ...current, postcodeText: event.target.value }))}
                 placeholder="Postcode"
               />
+            </div>
+            <div className="table-search table-search-compact">
+              <label htmlFor="customer-page-postcode-mode">Postcode match</label>
+              <select
+                id="customer-page-postcode-mode"
+                value={viewState.postcodeFilterMode ?? "outward"}
+                onChange={(event) => onViewStateChange((current) => ({ ...current, postcodeFilterMode: event.target.value as PostcodeFilterMode }))}
+              >
+                <option value="outward">Outward code</option>
+                <option value="startsWith">Starts with</option>
+                <option value="contains">Contains</option>
+              </select>
             </div>
             <div className="customer-inline-filters">
               <label className="header-filter">
@@ -9547,7 +10112,7 @@ function CustomersView({
             <td className="mono">
               {row.postcode ? (
                 <button className="row-link" type="button" onClick={() => onOpenProspectTest(row, "postcode", row.postcode)}>
-                  {row.postcode}
+                  {formatUkPostcode(row.postcode)}
                 </button>
               ) : (
                 ""
@@ -9786,7 +10351,7 @@ function CustomerImportMatchesModal({
               <div className="match-result-header">
                 <strong>{match.row.entity}</strong>
                 <span className="muted">
-                  {[match.row.tradingName, match.row.tradingPostcode].filter(Boolean).join(" / ")}
+                  {[match.row.tradingName, formatUkPostcode(match.row.tradingPostcode)].filter(Boolean).join(" / ")}
                 </span>
               </div>
               <div className="match-result-list">
@@ -9795,7 +10360,7 @@ function CustomerImportMatchesModal({
                     <div>
                       <strong>{customer.entityName}</strong>
                       <div className="muted">
-                        {[customer.tradingName, customer.postcode, customer.regionName].filter(Boolean).join(" / ")}
+                        {[customer.tradingName, formatUkPostcode(customer.postcode), customer.regionName].filter(Boolean).join(" / ")}
                       </div>
                       {customer.tradingAddress && <div className="muted">{customer.tradingAddress}</div>}
                     </div>
@@ -11303,6 +11868,10 @@ function LeadsView({
         }
       }
 
+      if (!matchesPostcodeFilter(row.postcode, viewState.postcodeText, viewState.postcodeFilterMode ?? "outward")) {
+        return false;
+      }
+
       const query = viewState.searchText.trim().toLowerCase();
       if (!query) return true;
 
@@ -11532,9 +12101,9 @@ function LeadsView({
 
   return (
     <>
-      <section className="table-controls">
-        <div className="table-search-group table-search-group-inline">
-          <div className="table-search table-search-compact">
+      <section className="table-controls leads-header-controls">
+        <div className="table-search-group leads-filter-grid">
+          <div className="table-search leads-search-wide">
             <label htmlFor="lead-page-search">Search leads</label>
             <input
               id="lead-page-search"
@@ -11544,7 +12113,30 @@ function LeadsView({
               placeholder="Customer, trading name, phone, email, ref, MID, postcode"
             />
           </div>
-          <div className="table-search table-search-compact">
+          <div className="table-search leads-filter-small">
+            <label htmlFor="lead-postcode-filter">Filter by postcode</label>
+            <input
+              id="lead-postcode-filter"
+              type="search"
+              value={viewState.postcodeText ?? ""}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, postcodeText: event.target.value }))}
+              placeholder="Postcode"
+            />
+          </div>
+          <div className="table-search leads-filter-small">
+            <label htmlFor="lead-postcode-mode">Postcode match</label>
+            <select
+              id="lead-postcode-mode"
+              className="header-select"
+              value={viewState.postcodeFilterMode ?? "outward"}
+              onChange={(event) => onViewStateChange((current) => ({ ...current, postcodeFilterMode: event.target.value as PostcodeFilterMode }))}
+            >
+              <option value="outward">Outward code</option>
+              <option value="startsWith">Starts with</option>
+              <option value="contains">Contains</option>
+            </select>
+          </div>
+          <div className="table-search leads-filter-medium">
             <label htmlFor="lead-user-select">User</label>
             <select
               id="lead-user-select"
@@ -11560,7 +12152,7 @@ function LeadsView({
               ))}
             </select>
           </div>
-          <div className="table-search table-search-compact">
+          <div className="table-search leads-filter-small">
             <label htmlFor="lead-priority-select">Priority</label>
             <select
               id="lead-priority-select"
@@ -11576,7 +12168,7 @@ function LeadsView({
               ))}
             </select>
           </div>
-          <div className="table-search table-search-compact">
+          <div className="table-search leads-filter-date">
             <label htmlFor="lead-created-from">Created from</label>
             <input
               id="lead-created-from"
@@ -11585,7 +12177,7 @@ function LeadsView({
               onChange={(event) => onViewStateChange((current) => ({ ...current, createdFrom: event.target.value }))}
             />
           </div>
-          <div className="table-search table-search-compact">
+          <div className="table-search leads-filter-date">
             <label htmlFor="lead-created-to">Created to</label>
             <input
               id="lead-created-to"
@@ -11594,7 +12186,7 @@ function LeadsView({
               onChange={(event) => onViewStateChange((current) => ({ ...current, createdTo: event.target.value }))}
             />
           </div>
-          <div className="table-search table-search-compact">
+          <div className="table-search leads-filter-medium">
             <label htmlFor="lead-filter-campaign-select">Filter by campaign</label>
             <select
               id="lead-filter-campaign-select"
@@ -11628,7 +12220,7 @@ function LeadsView({
               </label>
             ) : null}
           </div>
-          <div className="table-search table-search-compact">
+          <div className="table-search leads-filter-medium">
             <label htmlFor="lead-filter-wave-select">Filter by wave</label>
             <select
               id="lead-filter-wave-select"
@@ -11659,8 +12251,8 @@ function LeadsView({
             ) : null}
           </div>
         </div>
-        <div className="table-filter-actions">
-          <div className="table-search table-search-compact">
+        <div className="leads-wave-actions">
+          <div className="table-search leads-filter-medium">
             <label htmlFor="lead-campaign-select">Campaign</label>
             <select
               id="lead-campaign-select"
@@ -11682,7 +12274,7 @@ function LeadsView({
               ))}
             </select>
           </div>
-          <div className="table-search table-search-compact">
+          <div className="table-search leads-filter-medium">
             <label htmlFor="lead-wave-select">Wave</label>
             <select
               id="lead-wave-select"
@@ -11707,6 +12299,8 @@ function LeadsView({
           >
             Add Leads To Wave
           </button>
+        </div>
+        <div className="table-filter-actions leads-command-actions">
           <button
             className="secondary-action"
             type="button"
@@ -11735,6 +12329,8 @@ function LeadsView({
               onClick={() =>
               onViewStateChange({
                 searchText: "",
+                postcodeText: "",
+                postcodeFilterMode: "outward",
                 statusFilter: "all",
                 priorityFilter: "all",
                 assignedUserId: "",
@@ -11864,7 +12460,7 @@ function LeadsView({
             <td className="lead-email-cell"><CopyableEmail email={row.contactEmail} /></td>
             <td>{renderLeadCampaigns(memberships)}</td>
             <td>{renderLeadWaves(memberships)}</td>
-            <td className="mono">{row.postcode ?? ""}</td>
+            <td className="mono">{formatUkPostcode(row.postcode)}</td>
             <td>
               <LeadPriorityLights
                 value={row.leadPriority}
@@ -15193,6 +15789,8 @@ function CampaignsView({
   leadStatuses,
   responseStatuses,
   latestActivityEvent,
+  openRequest,
+  onOpenRequestHandled,
   onDataChanged
 }: {
   state: LoadState<Campaign[]>;
@@ -15202,6 +15800,8 @@ function CampaignsView({
   leadStatuses: LeadStatusOption[];
   responseStatuses: ResponseStatusOption[];
   latestActivityEvent: ActivityEvent | null;
+  openRequest: CampaignWaveOpenRequest | null;
+  onOpenRequestHandled: () => void;
   onDataChanged: () => void;
 }) {
   const [mode, setMode] = useState<"list" | "add">("list");
@@ -15220,6 +15820,7 @@ function CampaignsView({
   const [telesaleInteractionModal, setTelesaleInteractionModal] = useState<TelesaleLeadInteractionModalState | null>(null);
   const [waveLeadContactHistoryModal, setWaveLeadContactHistoryModal] = useState<WaveLeadContactHistoryModalState | null>(null);
   const [waveLeadTelesalesInstructionModal, setWaveLeadTelesalesInstructionModal] = useState<WaveLeadTelesalesInstructionModalState | null>(null);
+  const [highlightedWaveLeadId, setHighlightedWaveLeadId] = useState<number | null>(null);
   const telesaleUsers = users.filter((user) => user.userType === "Telesale");
 
   function waveToForm(wave: CampaignWave): CampaignWaveFormState {
@@ -15409,6 +16010,41 @@ function CampaignsView({
     setSelectedWaveId(waveId);
     await loadWaveLeads(waveId);
   }
+
+  useEffect(() => {
+    if (!openRequest) {
+      return;
+    }
+
+    setMode("list");
+    setWaveLeadSearchText("");
+    setWaveLeadPriorityFilter("all");
+    setWaveLeadSortKey("id");
+    setWaveLeadSortDirection("asc");
+    setWaveInteractionState({ loading: false });
+    setSelectedWaveId(openRequest.waveId);
+    setHighlightedWaveLeadId(openRequest.leadId ?? null);
+    void loadWaveLeads(openRequest.waveId);
+    void checkWaveTelesalesInteractions(openRequest.waveId, { notify: false });
+    onOpenRequestHandled();
+  }, [openRequest?.requestedAt]);
+
+  useEffect(() => {
+    if (!selectedWaveId || !highlightedWaveLeadId || waveLeadsState.loading || !waveLeadsState.data) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const row = document.querySelector(`[data-wave-lead-row-id="${highlightedWaveLeadId}"]`) as HTMLElement | null;
+      row?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    const clearTimer = window.setTimeout(() => setHighlightedWaveLeadId(null), 8000);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(clearTimer);
+    };
+  }, [selectedWaveId, highlightedWaveLeadId, waveLeadsState.loading, waveLeadsState.data]);
 
   async function loadWaveLeads(waveId: number) {
     setWaveLeadsState({ loading: true });
@@ -16311,7 +16947,11 @@ function CampaignsView({
                                                   ? `${instructionSummary!.instructionCount} acknowledged instruction${instructionSummary!.instructionCount === 1 ? "" : "s"}`
                                                   : "Add Telesales instruction";
                                             return (
-                                            <tr key={lead.id}>
+                                            <tr
+                                              key={lead.id}
+                                              className={lead.id === highlightedWaveLeadId ? "wave-lead-highlight-row" : ""}
+                                              data-wave-lead-row-id={lead.id}
+                                            >
                                               <td className="interaction-icon-cell">
                                                 <div className="wave-lead-row-actions">
                                                   <button
@@ -18310,7 +18950,7 @@ function CustomerMatchPanel({
         entityType: "customer",
         entityId: customerId,
         label: customer.tradingName || customer.entityName,
-        reference: customer.postcode
+        reference: formatUkPostcode(customer.postcode)
       }}
       calendarEntryTypes={calendarEntryTypes}
       users={users}
@@ -18580,7 +19220,7 @@ function CustomerMatchPanel({
               <DetailItem label="Email" value={<CopyableEmail email={match.contactEmail} />} />
               <DetailItem label="Owner" value={match.ownerName} />
               <DetailItem label="Address" value={match.addressLine1} />
-              <DetailItem label="Postcode" value={match.postcode} />
+              <DetailItem label="Postcode" value={formatUkPostcode(match.postcode)} />
               <DetailItem label="Status" value={match.status} />
               <DetailItem label="Prospect detail" value={match.hasStoredDetail ? "Stored" : "Not stored"} />
               <DetailItem label="Reasons" value={match.reasons.join(", ")} />
@@ -19780,10 +20420,14 @@ function ActivityEventList({ state }: { state: LoadState<ActivityEvent[]> }) {
 function ToastStack({
   events,
   currentUserName,
+  onRespondToTelesalesInstruction,
+  onOpenCampaignWave,
   onDismiss
 }: {
   events: ActivityEvent[];
   currentUserName?: string;
+  onRespondToTelesalesInstruction: (waveId: number, leadId: number, instructionId: number) => void;
+  onOpenCampaignWave: (waveId: number, leadId: number) => void;
   onDismiss: (eventId: number) => void;
 }) {
   if (!events.length) return null;
@@ -19798,21 +20442,57 @@ function ToastStack({
 
   return (
     <div className="toast-stack" role="status" aria-live="polite">
-      {events.map((event) => (
-        <article className="toast-card" key={event.id}>
-          <div className="toast-card-header">
-            <strong>{event.title}</strong>
-            <button className="icon-button" type="button" onClick={() => onDismiss(event.id)} aria-label="Dismiss event">
-              Ã—
-            </button>
-          </div>
-          <div>{describeEvent(event)}</div>
-          <div className="activity-item-meta">
-            <span>{event.actorName ?? currentUserName ?? "Unknown user"}</span>
-            <span>{formatDateTime(event.createdAt)}</span>
-          </div>
-        </article>
-      ))}
+      {events.map((event) => {
+        const waveId = getActivityMetadataNumber(event, "waveId");
+        const leadId = getActivityMetadataNumber(event, "leadId") ?? event.entityId;
+        const instructionId = getActivityMetadataNumber(event, "instructionId");
+        const canOpenInstruction = Boolean(waveId && leadId && instructionId && event.eventType.startsWith("lead.telesales_instruction."));
+        const canOpenWave = Boolean(waveId && leadId);
+
+        return (
+          <article className="toast-card" key={event.id}>
+            <div className="toast-card-header">
+              <strong>{event.title}</strong>
+              <button className="icon-button" type="button" onClick={() => onDismiss(event.id)} aria-label="Dismiss event">
+                x
+              </button>
+            </div>
+            <div>{describeEvent(event)}</div>
+            {(canOpenInstruction || canOpenWave) && (
+              <div className="toast-card-actions">
+                {canOpenInstruction && (
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    onClick={() => {
+                      onRespondToTelesalesInstruction(waveId!, leadId!, instructionId!);
+                      onDismiss(event.id);
+                    }}
+                  >
+                    Respond
+                  </button>
+                )}
+                {canOpenWave && (
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    onClick={() => {
+                      onOpenCampaignWave(waveId!, leadId!);
+                      onDismiss(event.id);
+                    }}
+                  >
+                    Open Wave
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="activity-item-meta">
+              <span>{event.actorName ?? currentUserName ?? "Unknown user"}</span>
+              <span>{formatDateTime(event.createdAt)}</span>
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }
@@ -19934,6 +20614,16 @@ function PanelSkeleton({ compact = false }: { compact?: boolean }) {
 
 function EmptyPanel({ message, compact = false }: { message: string; compact?: boolean }) {
   return <section className={compact ? "empty-panel compact-panel" : "empty-panel"}>{message}</section>;
+}
+
+function getActivityMetadataNumber(event: ActivityEvent, key: string): number | null {
+  const value = event.metadata?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 function ErrorPanel({ error, compact = false }: { error: string; compact?: boolean }) {
@@ -20517,6 +21207,54 @@ function formatReasons(value: string) {
   } catch {
     return value;
   }
+}
+
+function formatUkPostcode(value?: string | null) {
+  const normalized = value?.replace(/\s+/g, "").toUpperCase();
+  if (!normalized) return "";
+  if (normalized.length <= 3) return normalized;
+  return `${normalized.slice(0, -3)} ${normalized.slice(-3)}`;
+}
+
+function normalizeUkPostcode(value?: string | null) {
+  return value?.replace(/\s+/g, "").toUpperCase() ?? "";
+}
+
+function getUkPostcodeOutward(value?: string | null) {
+  const normalized = normalizeUkPostcode(value);
+  if (normalized.length <= 3) return normalized;
+  return normalized.slice(0, -3);
+}
+
+function matchesPostcodeFilter(value: string | undefined | null, query: string | undefined | null, mode: PostcodeFilterMode) {
+  const normalizedQuery = normalizeUkPostcode(query);
+  if (!normalizedQuery) return true;
+
+  const normalizedValue = normalizeUkPostcode(value);
+  if (!normalizedValue) return false;
+
+  if (mode === "startsWith") {
+    return normalizedValue.startsWith(normalizedQuery);
+  }
+
+  if (mode === "contains") {
+    return normalizedValue.includes(normalizedQuery);
+  }
+
+  const queryOutward = normalizedQuery.length > 4 ? getUkPostcodeOutward(normalizedQuery) : normalizedQuery;
+  return getUkPostcodeOutward(normalizedValue) === queryOutward;
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 function formatAddress(row: CustomerSearchRow) {

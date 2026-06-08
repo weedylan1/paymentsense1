@@ -193,7 +193,9 @@ app.MapPost("/api/waves/{exportId:long}/instructions/{instructionId:long}/acknow
             auth.User.Id,
             auth.User.FullName,
             $"Instruction acknowledged: {context?.LeadLabel ?? $"Lead #{context?.LeadId ?? 0}"}",
-            $"{auth.User.FullName} acknowledged \"{ShortenText(context?.InstructionText ?? acknowledged.InstructionText, 90)}\"{FormatWaveContext(context)}."));
+            $"{auth.User.FullName} acknowledged \"{ShortenText(context?.InstructionText ?? acknowledged.InstructionText, 90)}\"{FormatWaveContext(context)}.",
+            true,
+            BuildInstructionEventMetadata(context, instructionId)));
     }
 
     return acknowledged is null
@@ -231,7 +233,9 @@ app.MapPost("/api/waves/{exportId:long}/instructions/{instructionId:long}/replie
             auth.User.Id,
             auth.User.FullName,
             $"Telesales replied: {context?.LeadLabel ?? $"Lead #{context?.LeadId ?? 0}"}",
-            $"{auth.User.FullName}: \"{ShortenText(replyText, 120)}\"{FormatWaveContext(context)}."));
+            $"{auth.User.FullName}: \"{ShortenText(replyText, 120)}\"{FormatWaveContext(context)}.",
+            true,
+            BuildInstructionEventMetadata(context, instructionId)));
     }
 
     return created is null
@@ -270,7 +274,14 @@ app.MapPost("/api/waves/{exportId:long}/leads/{leadId:long}/instructions", async
             auth.User.Id,
             auth.User.FullName,
             $"Telesales message: {context?.LeadLabel ?? $"Lead #{leadId}"}",
-            $"{auth.User.FullName}: \"{ShortenText(instructionText, 120)}\"{FormatWaveContext(context)}."));
+            $"{auth.User.FullName}: \"{ShortenText(instructionText, 120)}\"{FormatWaveContext(context)}.",
+            true,
+            new Dictionary<string, object?>
+            {
+                ["waveId"] = context?.WaveId,
+                ["leadId"] = leadId,
+                ["instructionId"] = created.Id
+            }));
     }
 
     return created is null
@@ -603,10 +614,13 @@ static async Task<IReadOnlyList<TelesaleMainLeadContextSummaryResponse>> LoadMai
         instructions as (
           select
             i.lead_id,
-            count(*)::int as instruction_count,
-            count(*) filter (where i.acknowledged_at is null)::int as unacknowledged_instruction_count,
-            max(i.created_at) as latest_instruction_at
+            count(distinct i.id)::int as instruction_count,
+            (count(distinct i.id) filter (where i.acknowledged_at is null))::int as unacknowledged_instruction_count,
+            count(r.id)::int as reply_count,
+            max(i.created_at) as latest_instruction_at,
+            max(r.created_at) as latest_reply_at
           from paymentsense_core.telesale_lead_instructions i
+          left join paymentsense_core.telesale_lead_instruction_replies r on r.instruction_id = i.id
           join exported_leads el on el.campaign_wave_id = i.campaign_wave_id and el.lead_id = i.lead_id
           group by i.lead_id
         )
@@ -616,13 +630,20 @@ static async Task<IReadOnlyList<TelesaleMainLeadContextSummaryResponse>> LoadMai
           h.latest_contact_history_at,
           coalesce(i.instruction_count, 0) as instruction_count,
           coalesce(i.unacknowledged_instruction_count, 0) as unacknowledged_instruction_count,
-          i.latest_instruction_at
+          i.latest_instruction_at,
+          coalesce(i.reply_count, 0) as reply_count,
+          i.latest_reply_at
         from exported_leads el
         left join history h on h.lead_id = el.lead_id
         left join instructions i on i.lead_id = el.lead_id
         where coalesce(h.contact_history_count, 0) > 0
            or coalesce(i.instruction_count, 0) > 0
-        order by greatest(coalesce(h.latest_contact_history_at, '-infinity'::timestamptz), coalesce(i.latest_instruction_at, '-infinity'::timestamptz)) desc
+           or coalesce(i.reply_count, 0) > 0
+        order by greatest(
+          coalesce(h.latest_contact_history_at, '-infinity'::timestamptz),
+          coalesce(i.latest_instruction_at, '-infinity'::timestamptz),
+          coalesce(i.latest_reply_at, '-infinity'::timestamptz)
+        ) desc
         """);
     command.Parameters.AddWithValue("export_id", exportId);
 
@@ -636,7 +657,9 @@ static async Task<IReadOnlyList<TelesaleMainLeadContextSummaryResponse>> LoadMai
             reader.IsDBNull(2) ? null : reader.GetDateTime(2),
             reader.GetInt32(3),
             reader.GetInt32(4),
-            reader.IsDBNull(5) ? null : reader.GetDateTime(5)));
+            reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+            reader.GetInt32(6),
+            reader.IsDBNull(7) ? null : reader.GetDateTime(7)));
     }
 
     return rows;
@@ -846,6 +869,7 @@ static async Task<TelesaleInstructionNotificationContext?> LoadInstructionNotifi
     await using var command = db.CreateCommand("""
         select
           i.lead_id,
+          i.campaign_wave_id,
           i.instruction_text,
           cw.name as wave_name,
           c.name as campaign_name,
@@ -879,10 +903,11 @@ static async Task<TelesaleInstructionNotificationContext?> LoadInstructionNotifi
     return await reader.ReadAsync()
         ? new TelesaleInstructionNotificationContext(
             reader.GetInt64(0),
-            reader.GetString(1),
+            reader.GetInt64(1),
             reader.GetString(2),
             reader.GetString(3),
-            reader.GetString(4))
+            reader.GetString(4),
+            reader.GetString(5))
         : null;
 }
 
@@ -894,6 +919,14 @@ static string ShortenText(string text, int maxLength)
 
 static string FormatWaveContext(TelesaleInstructionNotificationContext? context) =>
     context is null ? "" : $" on {context.CampaignName} / {context.WaveName}.";
+
+static IReadOnlyDictionary<string, object?> BuildInstructionEventMetadata(TelesaleInstructionNotificationContext? context, long instructionId) =>
+    new Dictionary<string, object?>
+    {
+        ["waveId"] = context?.WaveId,
+        ["leadId"] = context?.LeadId,
+        ["instructionId"] = instructionId
+    };
 
 static string FormatSyncWaveContext(TelesaleSyncNotificationContext? context) =>
     context is null ? "" : $" on {context.CampaignName ?? "Campaign"} / {context.WaveName ?? "Wave"}";
@@ -1621,20 +1654,20 @@ internal sealed record TelesaleInteractionSync(long? Id, long LeadId, DateTimeOf
 internal sealed record TelesaleFollowUpSync(long? Id, long LeadId, DateTimeOffset? ScheduledTime, string? Notes, bool? Completed);
 internal sealed record TelesaleSyncResponse(long ExportId, int LeadStateCount, int InteractionCount, int FollowUpCount);
 internal sealed record TelesaleMainLeadContextResponse(IReadOnlyList<TelesaleMainContactHistoryResponse> ContactHistory, IReadOnlyList<TelesaleMainInstructionResponse> Instructions);
-internal sealed record TelesaleMainLeadContextSummaryResponse(long LeadId, int ContactHistoryCount, DateTime? LatestContactHistoryAt, int InstructionCount, int UnacknowledgedInstructionCount, DateTime? LatestInstructionAt);
+internal sealed record TelesaleMainLeadContextSummaryResponse(long LeadId, int ContactHistoryCount, DateTime? LatestContactHistoryAt, int InstructionCount, int UnacknowledgedInstructionCount, DateTime? LatestInstructionAt, int ReplyCount, DateTime? LatestReplyAt);
 internal sealed record TelesaleMainContactHistoryResponse(long Id, string Channel, DateTime ContactedAt, string? Outcome, string? Notes, string? Reason, string? WhoBy, string? ResponseStatus);
 internal sealed record TelesaleMainInstructionResponse(long Id, string InstructionText, string Priority, DateTime CreatedAt, long? CreatedByUserId, string? CreatedByUserName, DateTime? AcknowledgedAt, long? AcknowledgedByUserId, string? AcknowledgedByUserName, IReadOnlyList<TelesaleMainInstructionReplyResponse> Replies);
 internal sealed record TelesaleMainInstructionReplyResponse(long Id, long InstructionId, string ReplyText, long? CreatedByUserId, string? CreatedByUserName, DateTime CreatedAt);
 internal sealed record TelesaleInstructionReplyCreateRequest(string? ReplyText);
 internal sealed record TelesaleInstructionCreateRequest(string? InstructionText, string? Priority);
-internal sealed record TelesaleInstructionNotificationContext(long LeadId, string InstructionText, string WaveName, string CampaignName, string LeadLabel);
+internal sealed record TelesaleInstructionNotificationContext(long LeadId, long WaveId, string InstructionText, string WaveName, string CampaignName, string LeadLabel);
 internal sealed record TelesaleSyncNotificationContext(long WaveId, string? WaveName, string? CampaignName);
 internal sealed record TelesaleLeadInteractionSummaryResponse(long LeadId, int InteractionCount, DateTime LastInteractionAt, string? TelesaleUsers);
 internal sealed record TelesaleLeadInteractionDetailResponse(DateTime OccurredAt, string ActivityType, string Title, string? Details, string? TelesaleUser, string? CampaignName = null, string? WaveName = null);
-internal sealed record ActivityEventResponse(long Id, string EventType, string EntityType, long? EntityId, string Title, string Description, long? ActorUserId, string? ActorName, DateTime CreatedAt, bool IsNotifiable)
+internal sealed record ActivityEventResponse(long Id, string EventType, string EntityType, long? EntityId, string Title, string Description, long? ActorUserId, string? ActorName, DateTime CreatedAt, bool IsNotifiable, IReadOnlyDictionary<string, object?>? Metadata = null)
 {
-    public static ActivityEventResponse ForNotification(string eventType, string entityType, long? entityId, long? actorUserId, string? actorName, string title, string description, bool isNotifiable = true) =>
-        new(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), eventType, entityType, entityId, title, description, actorUserId, actorName, DateTime.UtcNow, isNotifiable);
+    public static ActivityEventResponse ForNotification(string eventType, string entityType, long? entityId, long? actorUserId, string? actorName, string title, string description, bool isNotifiable = true, IReadOnlyDictionary<string, object?>? metadata = null) =>
+        new(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), eventType, entityType, entityId, title, description, actorUserId, actorName, DateTime.UtcNow, isNotifiable, metadata);
 }
 
 internal sealed class RedisNotificationService(IConfiguration configuration, ILogger<RedisNotificationService> logger)

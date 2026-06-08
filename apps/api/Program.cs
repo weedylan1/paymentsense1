@@ -44,6 +44,15 @@ builder.Services.AddSingleton<RedisNotificationService>();
 
 var app = builder.Build();
 var redisNotifications = app.Services.GetRequiredService<RedisNotificationService>();
+var DashboardTelesalesKindOptions = new[]
+{
+    new DashboardTelesalesKindOptionResponse("instruction_started", "Telesales messages"),
+    new DashboardTelesalesKindOptionResponse("instruction_added", "Main App instructions"),
+    new DashboardTelesalesKindOptionResponse("instruction_reply", "Instruction replies"),
+    new DashboardTelesalesKindOptionResponse("interaction", "Telesales interactions"),
+    new DashboardTelesalesKindOptionResponse("state_update", "Lead state changes"),
+    new DashboardTelesalesKindOptionResponse("follow_up", "Follow-ups")
+};
 
 app.UseCors("Frontend");
 
@@ -104,6 +113,70 @@ app.MapPost("/api/dashboard/statistics/recalculate", async (NpgsqlDataSource db)
     await command.ExecuteNonQueryAsync();
 
     return Results.Ok(new DashboardStatisticsSnapshotResponse(calculatedAt, statistics));
+});
+
+app.MapGet("/api/dashboard/telesales-settings", async (NpgsqlDataSource db, long userId) =>
+{
+    if (userId <= 0 || !await UserExistsAsync(db, userId))
+    {
+        return Results.BadRequest(new { error = "A valid user is required." });
+    }
+
+    var visibleKinds = await LoadDashboardTelesalesVisibleKindsAsync(db, userId);
+    return Results.Ok(new DashboardTelesalesSettingsResponse(DashboardTelesalesKindOptions, visibleKinds));
+});
+
+app.MapPut("/api/dashboard/telesales-settings", async (NpgsqlDataSource db, long userId, DashboardTelesalesSettingsUpdateRequest request) =>
+{
+    if (userId <= 0 || !await UserExistsAsync(db, userId))
+    {
+        return Results.BadRequest(new { error = "A valid user is required." });
+    }
+
+    var requestedKinds = request.VisibleKinds?
+        .Where(kind => !string.IsNullOrWhiteSpace(kind))
+        .Select(kind => kind.Trim())
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray() ?? [];
+    var validKindKeys = DashboardTelesalesKindOptions.Select(kind => kind.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var invalidKinds = requestedKinds.Where(kind => !validKindKeys.Contains(kind)).ToArray();
+    if (invalidKinds.Length > 0)
+    {
+        return Results.BadRequest(new { error = "One or more interaction kinds are not valid.", invalidKinds });
+    }
+
+    await using var command = db.CreateCommand("""
+        insert into paymentsense_core.user_dashboard_telesales_settings (user_id, visible_kinds, updated_at)
+        values (@user_id, @visible_kinds, now())
+        on conflict (user_id) do update
+          set visible_kinds = excluded.visible_kinds,
+              updated_at = now()
+        """);
+    command.Parameters.AddWithValue("user_id", userId);
+    command.Parameters.Add("visible_kinds", NpgsqlDbType.Array | NpgsqlDbType.Text).Value = requestedKinds;
+    await command.ExecuteNonQueryAsync();
+
+    return Results.Ok(new DashboardTelesalesSettingsResponse(DashboardTelesalesKindOptions, requestedKinds));
+});
+
+app.MapGet("/api/dashboard/telesales-interactions", async (NpgsqlDataSource db, long userId, long? settingsUserId, string? kind, int? limit) =>
+{
+    if (userId < 0 || (userId > 0 && !await UserExistsAsync(db, userId)))
+    {
+        return Results.BadRequest(new { error = "A valid dashboard user is required." });
+    }
+
+    var take = Math.Clamp(limit ?? 80, 1, 200);
+    var visibleKinds = await LoadDashboardTelesalesVisibleKindsAsync(db, settingsUserId is > 0 ? settingsUserId.Value : userId);
+    if (!string.IsNullOrWhiteSpace(kind) && !string.Equals(kind, "all", StringComparison.OrdinalIgnoreCase))
+    {
+        var requestedKind = kind.Trim();
+        visibleKinds = visibleKinds.Contains(requestedKind, StringComparer.OrdinalIgnoreCase)
+            ? [requestedKind]
+            : [];
+    }
+
+    return Results.Ok(await LoadDashboardTelesalesInteractionsAsync(db, userId, visibleKinds, take));
 });
 
 app.MapGet("/api/activity-events", async (NpgsqlDataSource db, int? limit) =>
@@ -1399,6 +1472,7 @@ app.MapGet("/api/customer-map/customers", async (
     HttpRequest httpRequest,
     string? searchText,
     string? postcodeText,
+    string? postcodeFilterMode,
     long? regionId,
     long? customerActivityStatusId,
     long? customerValueTypeId,
@@ -1426,7 +1500,12 @@ app.MapGet("/api/customer-map/customers", async (
     }
     if (!string.IsNullOrWhiteSpace(postcodeText))
     {
-        conditions.Add("a.normalized_postcode ilike @postcode_text");
+        conditions.Add(postcodeFilterMode?.Trim() switch
+        {
+            "startsWith" => "replace(upper(coalesce(a.normalized_postcode, '')), ' ', '') like @postcode_text_prefix",
+            "contains" => "replace(upper(coalesce(a.normalized_postcode, '')), ' ', '') like @postcode_text_contains",
+            _ => "left(replace(upper(coalesce(a.normalized_postcode, '')), ' ', ''), greatest(length(replace(upper(coalesce(a.normalized_postcode, '')), ' ', '')) - 3, 0)) = @postcode_outward"
+        });
     }
     if (regionId.HasValue)
     {
@@ -1553,7 +1632,14 @@ app.MapGet("/api/customer-map/customers", async (
     command.Parameters.AddWithValue("take", take);
     command.Parameters.AddWithValue("offset", offset);
     if (!string.IsNullOrWhiteSpace(searchText)) command.Parameters.AddWithValue("search_text", $"%{searchText.Trim()}%");
-    if (!string.IsNullOrWhiteSpace(postcodeText)) command.Parameters.AddWithValue("postcode_text", $"%{postcodeText.Trim()}%");
+    if (!string.IsNullOrWhiteSpace(postcodeText))
+    {
+        var normalizedPostcodeText = Regex.Replace(postcodeText, "\\s+", "").ToUpper(CultureInfo.InvariantCulture);
+        var postcodeOutward = normalizedPostcodeText.Length <= 4 ? normalizedPostcodeText : normalizedPostcodeText[..^3];
+        command.Parameters.AddWithValue("postcode_text_prefix", $"{normalizedPostcodeText}%");
+        command.Parameters.AddWithValue("postcode_text_contains", $"%{normalizedPostcodeText}%");
+        command.Parameters.AddWithValue("postcode_outward", postcodeOutward);
+    }
     if (regionId.HasValue) command.Parameters.AddWithValue("region_id", regionId.Value);
     if (customerActivityStatusId.HasValue) command.Parameters.AddWithValue("customer_activity_status_id", customerActivityStatusId.Value);
     if (customerValueTypeId.HasValue) command.Parameters.AddWithValue("customer_value_type_id", customerValueTypeId.Value);
@@ -3586,7 +3672,13 @@ app.MapPost("/api/campaign-waves/{waveId:long}/leads/{leadId:long}/telesales-ins
         actor.Name,
         "Telesales instruction added",
         $"Added a {FormatLeadPriorityLabel(priority)} Telesales instruction to Lead #{leadId}.",
-        true));
+        true,
+        new Dictionary<string, object?>
+        {
+            ["waveId"] = waveId,
+            ["leadId"] = leadId,
+            ["instructionId"] = response.Id
+        }));
 
     return Results.Ok(response);
 });
@@ -3599,6 +3691,71 @@ app.MapGet("/api/campaign-waves/{waveId:long}/leads/{leadId:long}/telesales-inst
     }
 
     return Results.Ok(await LoadTelesaleLeadInstructionsAsync(db, waveId, leadId));
+});
+
+app.MapPost("/api/campaign-waves/{waveId:long}/leads/{leadId:long}/telesales-instructions/{instructionId:long}/replies", async (NpgsqlDataSource db, HttpRequest httpRequest, long waveId, long leadId, long instructionId, TelesaleLeadInstructionReplyCreateRequest request) =>
+{
+    var replyText = NullIfBlank(request.ReplyText);
+    if (replyText is null)
+    {
+        return Results.BadRequest(new { error = "Reply text is required." });
+    }
+
+    if (!await CampaignWaveLeadExistsAsync(db, waveId, leadId))
+    {
+        return Results.NotFound(new { error = "Lead was not found in this wave." });
+    }
+
+    if (!await TelesaleInstructionExistsAsync(db, waveId, leadId, instructionId))
+    {
+        return Results.NotFound(new { error = "Instruction was not found for this lead." });
+    }
+
+    var actor = await ResolveActivityActorAsync(db, httpRequest);
+    await using var command = db.CreateCommand("""
+        insert into paymentsense_core.telesale_lead_instruction_replies (
+          instruction_id,
+          reply_text,
+          created_by_user_id
+        )
+        values (
+          @instruction_id,
+          @reply_text,
+          @created_by_user_id
+        )
+        returning id, instruction_id, reply_text, created_by_user_id, created_at
+        """);
+    command.Parameters.AddWithValue("instruction_id", instructionId);
+    command.Parameters.AddWithValue("reply_text", replyText);
+    command.Parameters.AddWithValue("created_by_user_id", (object?)actor.UserId ?? DBNull.Value);
+
+    await using var reader = await command.ExecuteReaderAsync();
+    await reader.ReadAsync();
+    var response = new TelesaleLeadInstructionReplyResponse(
+        reader.GetInt64(0),
+        reader.GetInt64(1),
+        reader.GetString(2),
+        reader.IsDBNull(3) ? null : reader.GetInt64(3),
+        actor.Name,
+        reader.GetDateTime(4));
+
+    await LogActivityEventAsync(db, new ActivityEventCreateRequest(
+        "lead.telesales_instruction.replied",
+        "lead",
+        leadId,
+        actor.UserId,
+        actor.Name,
+        "Telesales instruction reply added",
+        $"Added a reply to the Telesales conversation for Lead #{leadId}.",
+        true,
+        new Dictionary<string, object?>
+        {
+            ["waveId"] = waveId,
+            ["leadId"] = leadId,
+            ["instructionId"] = instructionId
+        }));
+
+    return Results.Ok(response);
 });
 
 app.MapPost("/api/gdpr", async (NpgsqlDataSource db, GdprCreateRequest request) =>
@@ -6358,7 +6515,8 @@ static async Task<IReadOnlyList<ActivityEventResponse>> LoadActivityEventsAsync(
           e.actor_user_id,
           coalesce(u.full_name, e.actor_name_snapshot),
           e.created_at,
-          e.is_notifiable
+          e.is_notifiable,
+          e.metadata_json::text
         from paymentsense_core.activity_events e
         left join paymentsense_core.users u on u.id = e.actor_user_id
         order by e.created_at desc, e.id desc
@@ -6382,7 +6540,8 @@ static async Task<IReadOnlyList<ActivityEventResponse>> LoadActivityEventsAsync(
             reader.IsDBNull(6) ? null : reader.GetInt64(6),
             reader.GetNullableString(7),
             reader.GetDateTime(8),
-            reader.GetBoolean(9)));
+            reader.GetBoolean(9),
+            JsonSerializer.Deserialize<Dictionary<string, object?>>(reader.GetString(10), JsonDefaults.Options) ?? new Dictionary<string, object?>()));
     }
 
     return rows;
@@ -6623,6 +6782,191 @@ static async Task<IReadOnlyList<DashboardStatisticChartRowResponse>> LoadDashboa
     while (await reader.ReadAsync())
     {
         rows.Add(new DashboardStatisticChartRowResponse(reader.GetString(0), reader.GetInt64(1)));
+    }
+
+    return rows;
+}
+
+static string[] DefaultDashboardTelesalesKindKeys() =>
+[
+    "instruction_started",
+    "instruction_added",
+    "instruction_reply",
+    "interaction",
+    "state_update",
+    "follow_up"
+];
+
+static async Task<string[]> LoadDashboardTelesalesVisibleKindsAsync(NpgsqlDataSource db, long userId)
+{
+    await using var command = db.CreateCommand("""
+        select visible_kinds
+        from paymentsense_core.user_dashboard_telesales_settings
+        where user_id = @user_id
+        """);
+    command.Parameters.AddWithValue("user_id", userId);
+
+    var result = await command.ExecuteScalarAsync();
+    return result is string[] visibleKinds ? visibleKinds : DefaultDashboardTelesalesKindKeys();
+}
+
+static async Task<IReadOnlyList<DashboardTelesalesInteractionResponse>> LoadDashboardTelesalesInteractionsAsync(NpgsqlDataSource db, long userId, IReadOnlyList<string> visibleKinds, int limit)
+{
+    if (visibleKinds.Count == 0)
+    {
+        return [];
+    }
+
+    await using var command = db.CreateCommand("""
+        with assigned_leads as (
+          select
+            l.id,
+            coalesce(c.trading_name, co.display_name, sq.business_name, sqd.business_name, pp.display_name, sq.prospect_id, pp.prospect_id, 'Lead #' || l.id::text) as lead_label
+          from paymentsense_core.leads l
+          left join paymentsense_core.customers c on c.id = l.customer_id
+          left join paymentsense_core.organisations co on co.id = c.organisation_id
+          left join paymentsense_core.sales_quotes sq on sq.quote_id = l.source_quote_id
+          left join paymentsense_core.sales_quote_prospect_details sqd on sqd.prospect_id = sq.prospect_id
+          left join lateral (
+            select po.display_name, p.prospect_id
+            from paymentsense_core.lead_prospects lp
+            join paymentsense_core.prospects p on p.id = lp.prospect_id
+            join paymentsense_core.organisations po on po.id = p.organisation_id
+            where lp.lead_id = l.id
+            order by lp.is_primary desc, p.prospect_id
+            limit 1
+          ) pp on true
+          where (@user_id = 0 or l.assigned_user_id = @user_id)
+        ),
+        feed as (
+          select
+            case when coalesce(created_by.user_type, '') = 'Telesale' then 'instruction_started' else 'instruction_added' end as kind,
+            i.created_at as occurred_at,
+            i.lead_id,
+            i.campaign_wave_id as wave_id,
+            c.name as campaign_name,
+            cw.name as wave_name,
+            al.lead_label,
+            created_by.full_name as telesale_user,
+            case when coalesce(created_by.user_type, '') = 'Telesale' then 'Telesales message' else 'Main App instruction' end as title,
+            i.instruction_text as details,
+            i.id as instruction_id
+          from paymentsense_core.telesale_lead_instructions i
+          join assigned_leads al on al.id = i.lead_id
+          join paymentsense_core.campaign_waves cw on cw.id = i.campaign_wave_id
+          join paymentsense_core.campaigns c on c.id = cw.campaign_id
+          left join paymentsense_core.users created_by on created_by.id = i.created_by_user_id
+
+          union all
+
+          select
+            'instruction_reply' as kind,
+            r.created_at as occurred_at,
+            i.lead_id,
+            i.campaign_wave_id as wave_id,
+            c.name as campaign_name,
+            cw.name as wave_name,
+            al.lead_label,
+            created_by.full_name as telesale_user,
+            'Instruction reply' as title,
+            r.reply_text as details,
+            i.id as instruction_id
+          from paymentsense_core.telesale_lead_instruction_replies r
+          join paymentsense_core.telesale_lead_instructions i on i.id = r.instruction_id
+          join assigned_leads al on al.id = i.lead_id
+          join paymentsense_core.campaign_waves cw on cw.id = i.campaign_wave_id
+          join paymentsense_core.campaigns c on c.id = cw.campaign_id
+          left join paymentsense_core.users created_by on created_by.id = r.created_by_user_id
+
+          union all
+
+          select
+            'interaction' as kind,
+            ti.interacted_at as occurred_at,
+            ti.lead_id,
+            twe.campaign_wave_id as wave_id,
+            c.name as campaign_name,
+            cw.name as wave_name,
+            al.lead_label,
+            u.full_name as telesale_user,
+            coalesce(nullif(ti.interaction_type, ''), 'Telesales interaction') as title,
+            concat_ws(' - ', nullif(ti.outcome, ''), nullif(ti.notes, '')) as details,
+            null::bigint as instruction_id
+          from paymentsense_core.telesale_interactions ti
+          join assigned_leads al on al.id = ti.lead_id
+          join paymentsense_core.telesale_wave_exports twe on twe.id = ti.export_id
+          join paymentsense_core.campaign_waves cw on cw.id = twe.campaign_wave_id
+          join paymentsense_core.campaigns c on c.id = cw.campaign_id
+          left join paymentsense_core.users u on u.id = ti.telesale_user_id
+
+          union all
+
+          select
+            'state_update' as kind,
+            tls.updated_at as occurred_at,
+            tls.lead_id,
+            twe.campaign_wave_id as wave_id,
+            c.name as campaign_name,
+            cw.name as wave_name,
+            al.lead_label,
+            u.full_name as telesale_user,
+            case when tls.is_interaction_complete then 'Lead completed' else 'Lead state updated' end as title,
+            concat_ws(' - ', nullif(tls.status, ''), nullif(tls.response_status, ''), nullif(tls.completion_reason, ''), nullif(tls.notes, '')) as details,
+            null::bigint as instruction_id
+          from paymentsense_core.telesale_lead_states tls
+          join assigned_leads al on al.id = tls.lead_id
+          join paymentsense_core.telesale_wave_exports twe on twe.id = tls.export_id
+          join paymentsense_core.campaign_waves cw on cw.id = twe.campaign_wave_id
+          join paymentsense_core.campaigns c on c.id = cw.campaign_id
+          left join paymentsense_core.users u on u.id = tls.telesale_user_id
+
+          union all
+
+          select
+            'follow_up' as kind,
+            coalesce(tf.completed_at, tf.scheduled_at) as occurred_at,
+            tf.lead_id,
+            twe.campaign_wave_id as wave_id,
+            c.name as campaign_name,
+            cw.name as wave_name,
+            al.lead_label,
+            u.full_name as telesale_user,
+            case when tf.completed then 'Follow-up completed' else 'Follow-up scheduled' end as title,
+            tf.notes as details,
+            null::bigint as instruction_id
+          from paymentsense_core.telesale_followups tf
+          join assigned_leads al on al.id = tf.lead_id
+          join paymentsense_core.telesale_wave_exports twe on twe.id = tf.export_id
+          join paymentsense_core.campaign_waves cw on cw.id = twe.campaign_wave_id
+          join paymentsense_core.campaigns c on c.id = cw.campaign_id
+          left join paymentsense_core.users u on u.id = tf.telesale_user_id
+        )
+        select kind, occurred_at, lead_id, wave_id, campaign_name, wave_name, lead_label, telesale_user, title, nullif(details, ''), instruction_id
+        from feed
+        where kind = any(@visible_kinds)
+        order by occurred_at desc, lead_id desc
+        limit @limit
+        """);
+    command.Parameters.AddWithValue("user_id", userId);
+    command.Parameters.Add("visible_kinds", NpgsqlDbType.Array | NpgsqlDbType.Text).Value = visibleKinds.ToArray();
+    command.Parameters.AddWithValue("limit", limit);
+
+    var rows = new List<DashboardTelesalesInteractionResponse>();
+    await using var reader = await command.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+    {
+        rows.Add(new DashboardTelesalesInteractionResponse(
+            reader.GetString(0),
+            reader.GetDateTime(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3),
+            reader.GetString(4),
+            reader.GetString(5),
+            reader.GetString(6),
+            reader.GetNullableString(7),
+            reader.GetString(8),
+            reader.GetNullableString(9),
+            reader.IsDBNull(10) ? null : reader.GetInt64(10)));
     }
 
     return rows;
@@ -7759,7 +8103,8 @@ async Task LogActivityEventAsync(NpgsqlDataSource db, ActivityEventCreateRequest
         activityEvent.ActorUserId,
         activityEvent.ActorName,
         reader.GetDateTime(1),
-        activityEvent.IsNotifiable));
+        activityEvent.IsNotifiable,
+        activityEvent.Metadata ?? new Dictionary<string, object?>()));
 }
 
 static async Task<IReadOnlyList<DiaryEntryTypeResponse>> LoadDiaryEntryTypesAsync(NpgsqlDataSource db)
@@ -12774,6 +13119,19 @@ static async Task<bool> LeadExistsAsync(NpgsqlDataSource db, long leadId)
     return (bool?) await command.ExecuteScalarAsync() ?? false;
 }
 
+static async Task<bool> UserExistsAsync(NpgsqlDataSource db, long userId)
+{
+    await using var command = db.CreateCommand("""
+        select exists(
+          select 1
+          from paymentsense_core.users
+          where id = @user_id
+        )
+        """);
+    command.Parameters.AddWithValue("user_id", userId);
+    return (bool?)await command.ExecuteScalarAsync() ?? false;
+}
+
 static async Task<IReadOnlyList<LeadNoteResponse>> LoadLeadNotesAsync(NpgsqlDataSource db, long leadId)
 {
     const string notesSql = """
@@ -12816,6 +13174,23 @@ static async Task<bool> CampaignWaveLeadExistsAsync(NpgsqlDataSource db, long wa
             and lead_id = @lead_id
         )
         """);
+    command.Parameters.AddWithValue("wave_id", waveId);
+    command.Parameters.AddWithValue("lead_id", leadId);
+    return (bool?)await command.ExecuteScalarAsync() ?? false;
+}
+
+static async Task<bool> TelesaleInstructionExistsAsync(NpgsqlDataSource db, long waveId, long leadId, long instructionId)
+{
+    await using var command = db.CreateCommand("""
+        select exists(
+          select 1
+          from paymentsense_core.telesale_lead_instructions
+          where id = @instruction_id
+            and campaign_wave_id = @wave_id
+            and lead_id = @lead_id
+        )
+        """);
+    command.Parameters.AddWithValue("instruction_id", instructionId);
     command.Parameters.AddWithValue("wave_id", waveId);
     command.Parameters.AddWithValue("lead_id", leadId);
     return (bool?)await command.ExecuteScalarAsync() ?? false;
@@ -13670,6 +14045,12 @@ static string? FormatUkPostcode(string? value)
     var compact = value.Replace(" ", "", StringComparison.Ordinal).ToUpper(CultureInfo.InvariantCulture);
     return compact.Length <= 3 ? compact : $"{compact[..^3]} {compact[^3..]}";
 }
+
+static string NormalizeUkPostcodeText(string value) =>
+    Regex.Replace(value, "\\s+", "").ToUpper(CultureInfo.InvariantCulture);
+
+static string GetUkPostcodeOutwardCode(string normalizedPostcode) =>
+    normalizedPostcode.Length <= 3 ? normalizedPostcode : normalizedPostcode[..^3];
 }
 
 internal static class TextNormalizer
@@ -14058,7 +14439,11 @@ internal sealed record DashboardStatisticsResponse(
     IReadOnlyList<DashboardStatisticChartRowResponse> CustomersByValueType,
     IReadOnlyList<DashboardStatisticChartRowResponse> CustomersByRegion);
 internal sealed record DashboardStatisticChartRowResponse(string Label, long Value);
-internal sealed record ActivityEventResponse(long Id, string EventType, string EntityType, long? EntityId, string Title, string Description, long? ActorUserId, string? ActorName, DateTime CreatedAt, bool IsNotifiable);
+internal sealed record DashboardTelesalesKindOptionResponse(string Key, string Label);
+internal sealed record DashboardTelesalesSettingsResponse(IReadOnlyList<DashboardTelesalesKindOptionResponse> Kinds, IReadOnlyList<string> VisibleKinds);
+internal sealed record DashboardTelesalesSettingsUpdateRequest(IReadOnlyList<string>? VisibleKinds);
+internal sealed record DashboardTelesalesInteractionResponse(string Kind, DateTime OccurredAt, long LeadId, long WaveId, string CampaignName, string WaveName, string LeadLabel, string? TelesaleUser, string Title, string? Details, long? InstructionId);
+internal sealed record ActivityEventResponse(long Id, string EventType, string EntityType, long? EntityId, string Title, string Description, long? ActorUserId, string? ActorName, DateTime CreatedAt, bool IsNotifiable, IReadOnlyDictionary<string, object?>? Metadata = null);
 internal sealed record ActivityEventCreateRequest(string EventType, string EntityType, long? EntityId, long? ActorUserId, string? ActorName, string Title, string Description, bool IsNotifiable, IReadOnlyDictionary<string, object?>? Metadata = null);
 internal sealed record ActivityActorContext(long? UserId, string? Name);
 internal sealed record DiaryEntryTypeResponse(long Id, string Name, string Code, string? Description, bool CanScheduleJob, string? DefaultJobType, bool IsActive, int SortOrder, DateTime CreatedAt, DateTime UpdatedAt);
@@ -14366,6 +14751,7 @@ internal sealed record CampaignWaveLeadBulkStatusUpdateRequest(string LeadStatus
 internal sealed record CampaignWaveTelesaleSendRequest(IReadOnlyList<long>? UserIds);
 internal sealed record CampaignWaveTelesaleExportPayload(string Json, int LeadCount);
 internal sealed record TelesaleLeadInstructionCreateRequest(string? InstructionText, string? Priority);
+internal sealed record TelesaleLeadInstructionReplyCreateRequest(string? ReplyText);
 internal sealed record TelesaleLeadInstructionResponse(long Id, long CampaignWaveId, long LeadId, string InstructionText, string Priority, long? CreatedByUserId, string? CreatedByUserName, DateTime CreatedAt, DateTime? AcknowledgedAt, long? AcknowledgedByUserId, string? AcknowledgedByUserName, IReadOnlyList<TelesaleLeadInstructionReplyResponse> Replies);
 internal sealed record TelesaleLeadInstructionReplyResponse(long Id, long InstructionId, string ReplyText, long? CreatedByUserId, string? CreatedByUserName, DateTime CreatedAt);
 internal sealed record TelesaleInstructionSummaryResponse(long InstructionCount, long UnacknowledgedInstructionCount, long ReplyCount, DateTime? LatestInstructionAt, DateTime? LatestReplyAt);
